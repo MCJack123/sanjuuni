@@ -467,7 +467,42 @@ static Vec3b nearestColor(const std::vector<Vec3b>& palette, const Vec3b& color)
     return palette[n];
 }
 
-Mat ditherImage(Mat image, std::vector<Vec3b> palette) {
+static void thresholdWorker(const Mat * in, Mat * out, const std::vector<Vec3b> * palette, std::queue<int> * queue, std::mutex * mtx) {
+    while (true) {
+        mtx->lock();
+        if (queue->empty()) {
+            mtx->unlock();
+            return;
+        }
+        int row = queue->front();
+        queue->pop();
+        mtx->unlock();
+        for (int x = 0; x < in->cols; x++) out->at<Vec3b>(row, x) = nearestColor(*palette, in->at<Vec3b>(row, x));
+    }
+}
+
+Mat thresholdImage(const Mat& image, const std::vector<Vec3b>& palette) {
+    Mat output(image.rows, image.cols, CV_8UC3);
+    initCL();
+    if (CLPlatform() && false) {
+        // Use OpenCL for computation
+    } else {
+        // Use normal CPU for computation
+        std::queue<int> rows;
+        std::mutex mtx;
+        std::vector<std::thread*> thread_pool;
+        unsigned nthreads = std::thread::hardware_concurrency();
+        if (!nthreads) nthreads = 8; // default if no value is available
+        mtx.lock(); // pause threads until queue is filled
+        for (int i = 0; i < nthreads; i++) thread_pool.push_back(new std::thread(thresholdWorker, &image, &output, &palette, &rows, &mtx));
+        for (int i = 0; i < image.rows; i++) rows.push(i);
+        mtx.unlock(); // release threads to start working
+        for (int i = 0; i < nthreads; i++) {thread_pool[i]->join(); delete thread_pool[i];}
+    }
+    return output;
+}
+
+Mat ditherImage(Mat image, const std::vector<Vec3b>& palette) {
     for (int y = 0; y < image.rows; y++) {
         for (int x = 0; x < image.cols; x++) {
             Vec3b c = image.at<Vec3b>(y, x);
@@ -605,9 +640,9 @@ std::string makeRawImage(const uchar * screen, const uchar * colors, const std::
         output.put(n);
     }
     for (int i = 0; i < 16; i++) {
-        output.put(palette[i][0]);
-        output.put(palette[i][1]);
         output.put(palette[i][2]);
+        output.put(palette[i][1]);
+        output.put(palette[i][0]);
     }
     std::string orig = output.str();
     std::stringstream ss;
@@ -639,18 +674,22 @@ int main(int argc, const char * argv[]) {
     OptionSet options;
     options.addOption(Option("input", "i", "Input image or video", true, "file", true));
     options.addOption(Option("output", "o", "Output file path", false, "path", true));
-    options.addOption(Option("lua", "l", "Output a Lua script file (default for images)"));
-    options.addOption(Option("raw", "r", "Output a rawmode-based image/video file (required for videos)"));
+    options.addOption(Option("lua", "l", "Output a Lua script file (default for images; only does one frame)"));
+    options.addOption(Option("raw", "r", "Output a rawmode-based image/video file (default for videos)"));
     options.addOption(Option("http", "s", "Serve an HTTP server that has each frame split up + a player program", false, "port", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("websocket", "w", "Serve a WebSocket that sends the image/video with audio", false, "port", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("default-palette", "p", "Use the default CC palette instead of generating an optimized one"));
+    options.addOption(Option("threshold", "t", "Use thresholding instead of dithering"));
+    options.addOption(Option("width", "w", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
+    options.addOption(Option("height", "H", "Resize the image to the specified height", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("help", "h", "Show this help"));
     OptionProcessor argparse(options);
     argparse.setUnixStyle(true);
 
     std::string input, output;
-    bool useDefaultPalette = false;
-    int mode = 0, port;
+    bool useDefaultPalette = false, noDither = false;
+    int mode = -1, port;
+    int width = -1, height = -1;
     try {
         for (int i = 1; i < argc; i++) {
             std::string option, arg;
@@ -659,9 +698,12 @@ int main(int argc, const char * argv[]) {
                 else if (option == "output") output = arg;
                 else if (option == "lua") mode = 0;
                 else if (option == "raw") mode = 1;
-                else if (option == "http") {mode = 2; arg = std::stoi(arg);}
-                else if (option == "websocket") {mode = 3; arg = std::stoi(arg);}
+                else if (option == "http") {mode = 2; port = std::stoi(arg);}
+                else if (option == "websocket") {mode = 3; port = std::stoi(arg);}
                 else if (option == "default-palette") useDefaultPalette = true;
+                else if (option == "threshold") noDither = true;
+                else if (option == "width") width = std::stoi(arg);
+                else if (option == "height") height = std::stoi(arg);
                 else if (option == "help") throw HelpException();
             }
         }
@@ -677,51 +719,62 @@ int main(int argc, const char * argv[]) {
         return 0;
     }
 
-    Mat in = imread(input);
-    Mat out;
-    std::vector<Vec3b> palette;
-    if (useDefaultPalette) palette = defaultPalette;
-    else palette = reducePalette(in, 16);
-    out = ditherImage(in, palette);
-    Mat1b pimg = rgbToPaletteImage(out, palette);
-    uchar *characters, *colors;
-    makeCCImage(pimg, palette, &characters, &colors);
-    switch (mode) {
-    case 0: {
-        std::string data = makeLuaFile(characters, colors, palette, pimg.cols / 2, pimg.rows / 3);
-        if (output == "-") std::cout << data;
-        else {
-            std::ofstream out(output);
-            if (!out.good()) {
-                std::cerr << "Could not open output file!\n";
-                break;
-            }
-            out << data;
-            out.close();
+    VideoCapture cap(input);
+    std::string rawtmp, luatmp;
+    std::ofstream outfile;
+    if (output != "-" && output != "") {
+        outfile.open(output);
+        if (!outfile.good()) {
+            std::cerr << "Could not open output file!\n";
+            return 1;
         }
-        break;
-    } case 1: {
-        std::string data = makeRawImage(characters, colors, palette, pimg.cols / 2, pimg.rows / 3);
-        if (output == "-") std::cout << "32Vid 1.1\n0\n" << data;
-        else {
-            std::ofstream out(output);
-            if (!out.good()) {
-                std::cerr << "Could not open output file!\n";
-                break;
-            }
-            out << "32Vid 1.1\n0\n" << data;
-            out.close();
+    }
+    std::ostream& outstream = (output == "-" || output == "") ? std::cout : outfile;
+    if (mode == 1) outstream << "32Vid 1.1\n" << cap.get(CAP_PROP_FPS) << "\n";
+    while (true) {
+        Mat in, out;
+        if (!cap.read(in)) break;
+        if (mode == -1 && !luatmp.empty()) {
+            luatmp = "";
+            outstream << "32Vid 1.1\n" << cap.get(CAP_PROP_FPS) << "\n" << rawtmp;
+            mode = 1;
         }
-        break;
-    } case 2: {
-        std::cerr << "Unimplemented!\n";
-        break;
-    } case 3: {
-        std::cerr << "Unimplemented!\n";
-        break;
+        if (width != -1 || height != -1) {
+            Mat rs;
+            resize(in, rs, Size(width == -1 ? height * ((double)in.cols / (double)in.rows) : width, height == -1 ? width * ((double)in.rows / (double)in.cols) : height));
+            in = rs;
+        }
+        std::vector<Vec3b> palette;
+        if (useDefaultPalette) palette = defaultPalette;
+        else palette = reducePalette(in, 16);
+        if (noDither) out = thresholdImage(in, palette);
+        else out = ditherImage(in, palette);
+        Mat1b pimg = rgbToPaletteImage(out, palette);
+        uchar *characters, *colors;
+        makeCCImage(pimg, palette, &characters, &colors);
+        switch (mode) {
+        case -1: {
+            rawtmp = makeRawImage(characters, colors, palette, pimg.cols / 2, pimg.rows / 3);
+            luatmp = makeLuaFile(characters, colors, palette, pimg.cols / 2, pimg.rows / 3);
+            break;
+        } case 0: {
+            outstream << makeLuaFile(characters, colors, palette, pimg.cols / 2, pimg.rows / 3);
+            break;
+        } case 1: {
+            outstream << makeRawImage(characters, colors, palette, pimg.cols / 2, pimg.rows / 3);
+            break;
+        } case 2: {
+            std::cerr << "Unimplemented!\n";
+            break;
+        } case 3: {
+            std::cerr << "Unimplemented!\n";
+            break;
+        }
+        }
+        delete[] characters;
+        delete[] colors;
     }
-    }
-    delete[] characters;
-    delete[] colors;
+    if (!luatmp.empty()) outstream << luatmp;
+    if (outfile.is_open()) outfile.close();
     return 0;
 }
