@@ -4,7 +4,6 @@
 #include <opencv2/videoio.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/highgui.hpp>
 #include <CL/opencl.hpp>
 #include <Poco/Base64Encoder.h>
 #include <Poco/Checksum.h>
@@ -684,10 +683,6 @@ int main(int argc, const char * argv[]) {
     if (useDefaultPalette) palette = defaultPalette;
     else palette = reducePalette(in, 16);
     out = ditherImage(in, palette);
-    if (argc > 2) {
-        imshow("Image", out);
-        waitKey(0);
-    }
     Mat1b pimg = rgbToPaletteImage(out, palette);
     uchar *characters, *colors;
     makeCCImage(pimg, palette, &characters, &colors);

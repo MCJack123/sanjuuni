@@ -1,6 +1,18 @@
 # sanjuuni
 Converts images and videos into a format that can be displayed in ComputerCraft. Spiritual successor to [juroku](https://github.com/tmpim/juroku), which is hard to build and isn't as flexible.
 
+## Building
+Requirements:
+* C++11 or later compiler
+* OpenCV
+* OpenCL
+* Poco
+
+Simply build `sanjuuni.cpp` with a C++ compiler, linking in the following libraries:
+```
+-lopencv_core -lopencv_videoio -lopencv_imgcodecs -lopencv_imgproc -lOpenCL -lpthread -lPocoFoundation -lPocoUtil -lPocoNet
+```
+
 ## Usage
 ```
 -ifile, --input=file      Input image or video
