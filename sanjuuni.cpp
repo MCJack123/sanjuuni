@@ -76,19 +76,20 @@ int operator==(const float3& a, const float3& b) {return a.x == b.x && a.y == b.
 using namespace std::chrono;
 //using namespace cl;
 using namespace Poco::Util;
-struct Vec3i : public std::array<int, 3> {
-    Vec3i() = default;
-    template<typename T> Vec3i(const std::array<T, 3>& a) {(*this)[0] = a[0]; (*this)[1] = a[1]; (*this)[2] = a[2];}
-    template<typename T> Vec3i(std::initializer_list<T> il) {(*this)[0] = *(il.begin()); (*this)[1] = *(il.begin()+1); (*this)[2] = *(il.begin()+2);}
-    Vec3i operator*(double b) {return {(*this)[0] * b, (*this)[1] * b, (*this)[2] * b};}
-    Vec3i operator/(double b) {return {(*this)[0] / b, (*this)[1] / b, (*this)[2] / b};}
-    Vec3i operator-(const Vec3i& b) {return {(*this)[0] - b[0], (*this)[1] - b[1], (*this)[2] - b[2]};}
+struct Vec3d : public std::array<double, 3> {
+    Vec3d() = default;
+    template<typename T> Vec3d(const std::array<T, 3>& a) {(*this)[0] = a[0]; (*this)[1] = a[1]; (*this)[2] = a[2];}
+    template<typename T> Vec3d(std::initializer_list<T> il) {(*this)[0] = *(il.begin()); (*this)[1] = *(il.begin()+1); (*this)[2] = *(il.begin()+2);}
+    Vec3d operator+(const Vec3d& b) {return {(*this)[0] + b[0], (*this)[1] + b[1], (*this)[2] + b[2]};}
+    Vec3d operator-(const Vec3d& b) {return {(*this)[0] - b[0], (*this)[1] - b[1], (*this)[2] - b[2]};}
+    Vec3d operator*(double b) {return {(double)(*this)[0] * b, (double)(*this)[1] * b, (double)(*this)[2] * b};}
+    Vec3d operator/(double b) {return {(*this)[0] / b, (*this)[1] / b, (*this)[2] / b};}
+    Vec3d& operator+=(const Vec3d& a) {(*this)[0] += a[0]; (*this)[1] += a[1]; (*this)[2] += a[2]; return *this;}
 };
 struct Vec3b : public std::array<uint8_t, 3> {
     Vec3b() = default;
     template<typename T> Vec3b(const std::array<T, 3>& a) {(*this)[0] = a[0]; (*this)[1] = a[1]; (*this)[2] = a[2];}
     template<typename T> Vec3b(std::initializer_list<T> il) {(*this)[0] = *(il.begin()); (*this)[1] = *(il.begin()+1); (*this)[2] = *(il.begin()+2);}
-    Vec3b& operator+=(const Vec3i& a) {(*this)[0] += a[0]; (*this)[1] += a[1]; (*this)[2] += a[2]; return *this;}
 };
 template<typename T>
 class vector2d {
@@ -506,8 +507,8 @@ void initCL() {
 
 static std::vector<Vec3b> medianCut(std::vector<Vec3b>& pal, int num) {
     if (num == 1) {
-        Vec3i sum = {0, 0, 0};
-        for (const Vec3b& v : pal) {sum[0] += v[0]; sum[1] += v[1]; sum[2] += v[2];}
+        Vec3d sum = {0, 0, 0};
+        for (const Vec3b& v : pal) sum += v;
         return {Vec3b(sum / (double)pal.size())};
     } else {
         uint8_t red[2] = {255, 0}, green[2] = {255, 0}, blue[2] = {255, 0};
@@ -548,7 +549,7 @@ std::vector<Vec3b> reducePalette(const Mat& image, int numColors) {
     return medianCut(pal, numColors);
 }
 
-static Vec3b nearestColor(const std::vector<Vec3b>& palette, const Vec3b& color) {
+static Vec3b nearestColor(const std::vector<Vec3b>& palette, const Vec3d& color) {
     double n, dist = 1e100;
     for (int i = 0; i < palette.size(); i++) {
         const Vec3b& v = palette[i];
@@ -593,22 +594,24 @@ Mat thresholdImage(const Mat& image, const std::vector<Vec3b>& palette) {
     return output;
 }
 
-Mat ditherImage(Mat image, const std::vector<Vec3b>& palette) {
+Mat ditherImage(const Mat& image, const std::vector<Vec3b>& palette) {
+    vector2d<Vec3d> errmap(image.width, image.height);
+    Mat retval(image.width, image.height);
     for (int y = 0; y < image.height; y++) {
         for (int x = 0; x < image.width; x++) {
-            Vec3b c = image.at(y, x);
+            Vec3d c = Vec3d(image.at(y, x)) + errmap.at(y, x);
             Vec3b newpixel = nearestColor(palette, c);
-            image.at(y, x) = newpixel;
-            Vec3i err = Vec3i(c) - Vec3i(newpixel);
-            if (x < image.width - 1) image.at(y, x + 1) += err * (7.0/16.0);
+            retval.at(y, x) = newpixel;
+            Vec3d err = c - Vec3d(newpixel);
+            if (x < image.width - 1) errmap.at(y, x + 1) += err * (7.0/16.0);
             if (y < image.height - 1) {
-                if (x > 1) image.at(y + 1, x - 1) += err * (3.0/16.0);
-                image.at(y + 1, x) += err * (5.0/16.0);
-                if (x < image.width - 1) image.at(y + 1, x + 1) += err * (1.0/16.0);
+                if (x > 1) errmap.at(y + 1, x - 1) += err * (3.0/16.0);
+                errmap.at(y + 1, x) += err * (5.0/16.0);
+                if (x < image.width - 1) errmap.at(y + 1, x + 1) += err * (1.0/16.0);
             }
         }
     }
-    return image;
+    return retval;
 }
 
 Mat1b rgbToPaletteImage(const Mat& image, const std::vector<Vec3b>& palette) {
@@ -862,6 +865,7 @@ int main(int argc, const char * argv[]) {
         avformat_close_input(&format_ctx);
         return error;
     }
+    if (mode == -1) mode = format_ctx->streams[video_stream]->nb_frames > 0 ? 1 : 0;
     // Open the audio decoder if present
     if (audio_stream >= 0) {
         if (!(audio_codec = avcodec_find_decoder(format_ctx->streams[audio_stream]->codecpar->codec_id))) {
@@ -895,7 +899,6 @@ int main(int argc, const char * argv[]) {
     AVPacket * packet = av_packet_alloc();
     AVFrame * frame = av_frame_alloc();
 
-    std::string rawtmp, luatmp;
     std::ofstream outfile;
     if (output != "-" && output != "") {
         outfile.open(output);
@@ -910,29 +913,24 @@ int main(int argc, const char * argv[]) {
         }
     }
     std::ostream& outstream = (output == "-" || output == "") ? std::cout : outfile;
-    if (mode == 1) outstream << "32Vid 1.1\n" << ((double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den) << "\n";
     int nframe = 0;
     while (av_read_frame(format_ctx, packet) >= 0) {
         if (packet->stream_index == video_stream) {
             avcodec_send_packet(video_codec_ctx, packet);
+            if (nframe == 0 && mode == 1) outstream << "32Vid 1.1\n" << ((double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den) << "\n";
             while ((error = avcodec_receive_frame(video_codec_ctx, frame)) == 0) {
                 std::cerr << "\rframe " << nframe++ << "/" << format_ctx->streams[video_stream]->nb_frames;
                 std::cerr.flush();
-                Mat in(frame->width, frame->height), out;
+                Mat out;
                 if (resize_ctx == NULL) {
                     if (width != -1 || height != -1) {
-                        width = width == -1 ? height * ((double)in.width / (double)in.height) : width;
-                        height = height == -1 ? width * ((double)in.height / (double)in.width) : height;
+                        width = width == -1 ? height * ((double)frame->width / (double)frame->height) : width;
+                        height = height == -1 ? width * ((double)frame->height / (double)frame->width) : height;
                     } else {
                         width = frame->width;
                         height = frame->height;
                     }
                     resize_ctx = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format, width, height, AV_PIX_FMT_BGR24, SWS_BICUBIC, NULL, NULL, NULL);
-                }
-                if (mode == -1 && !luatmp.empty()) {
-                    luatmp = "";
-                    outstream << "32Vid 1.1\n" << ((double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den) << "\n" << rawtmp;
-                    mode = 1;
                 }
                 Mat rs(width, height);
                 uint8_t * data = new uint8_t[width * height * 3];
@@ -952,11 +950,7 @@ int main(int argc, const char * argv[]) {
                 uchar *characters, *colors;
                 makeCCImage(pimg, palette, &characters, &colors);
                 switch (mode) {
-                case -1: {
-                    rawtmp = makeRawImage(characters, colors, palette, pimg.width / 2, pimg.height / 3);
-                    luatmp = makeLuaFile(characters, colors, palette, pimg.width / 2, pimg.height / 3);
-                    break;
-                } case 0: {
+                case 0: {
                     outstream << makeLuaFile(characters, colors, palette, pimg.width / 2, pimg.height / 3);
                     break;
                 } case 1: {
@@ -980,7 +974,6 @@ int main(int argc, const char * argv[]) {
 
         }
     }
-    if (!luatmp.empty()) outstream << luatmp;
     if (outfile.is_open()) outfile.close();
     av_frame_free(&frame);
     av_packet_free(&packet);
