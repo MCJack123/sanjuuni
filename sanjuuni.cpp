@@ -1,10 +1,31 @@
+/*
+ * sanjuuni: Converts images and videos into a format that can be displayed in ComputerCraft.
+ * Copyright (C) 2022 JackMacWindows
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
 #define CL_HPP_TARGET_OPENCL_VERSION 200
 #define CL_HPP_ENABLE_EXCEPTIONS
-#include <opencv2/core.hpp>
-#include <opencv2/videoio.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
-#include <CL/opencl.hpp>
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+#include <libswscale/swscale.h>
+#include <libswresample/swresample.h>
+}
+//#include <CL/opencl.hpp>
 #include <Poco/Base64Encoder.h>
 #include <Poco/Checksum.h>
 #include <Poco/Util/OptionProcessor.h>
@@ -19,6 +40,8 @@
 #include <sstream>
 #include <algorithm>
 #include <thread>
+#include <mutex>
+#include <array>
 #include <queue>
 
 // OpenCL polyfills
@@ -51,11 +74,79 @@ float3 operator*(const float3& v, float s) {return {v.x * s, v.y * s, v.z * s};}
 int operator==(const float3& a, const float3& b) {return a.x == b.x && a.y == b.y && a.z == b.z;}
 
 using namespace std::chrono;
-using namespace cv;
-using namespace cl;
+//using namespace cl;
 using namespace Poco::Util;
+struct Vec3i : public std::array<int, 3> {
+    Vec3i() = default;
+    template<typename T> Vec3i(const std::array<T, 3>& a) {(*this)[0] = a[0]; (*this)[1] = a[1]; (*this)[2] = a[2];}
+    template<typename T> Vec3i(std::initializer_list<T> il) {(*this)[0] = *(il.begin()); (*this)[1] = *(il.begin()+1); (*this)[2] = *(il.begin()+2);}
+    Vec3i operator*(double b) {return {(*this)[0] * b, (*this)[1] * b, (*this)[2] * b};}
+    Vec3i operator/(double b) {return {(*this)[0] / b, (*this)[1] / b, (*this)[2] / b};}
+    Vec3i operator-(const Vec3i& b) {return {(*this)[0] - b[0], (*this)[1] - b[1], (*this)[2] - b[2]};}
+};
+struct Vec3b : public std::array<uint8_t, 3> {
+    Vec3b() = default;
+    template<typename T> Vec3b(const std::array<T, 3>& a) {(*this)[0] = a[0]; (*this)[1] = a[1]; (*this)[2] = a[2];}
+    template<typename T> Vec3b(std::initializer_list<T> il) {(*this)[0] = *(il.begin()); (*this)[1] = *(il.begin()+1); (*this)[2] = *(il.begin()+2);}
+    Vec3b& operator+=(const Vec3i& a) {(*this)[0] += a[0]; (*this)[1] += a[1]; (*this)[2] += a[2]; return *this;}
+};
+template<typename T>
+class vector2d {
+public:
+    unsigned width;
+    unsigned height;
+    std::vector<T> vec;
+    class row {
+        std::vector<T> * vec;
+        unsigned ypos;
+        unsigned size;
+    public:
+        row(std::vector<T> *v, unsigned y, unsigned s): vec(v), ypos(y), size(s) {}
+        T& operator[](unsigned idx) { 
+            if (idx >= size) throw std::out_of_range("Vector2D index out of range");
+            return (*vec)[ypos+idx];
+        }
+        row& operator=(std::vector<T> v) {std::copy(v.begin(), v.begin() + (v.size() > size ? v.size() : size), vec->begin() + ypos); return *this;}
+        row& operator=(row v) {std::copy(v.vec->begin() + v.ypos, v.vec->begin() + v.ypos + v.size, vec->begin() + ypos); return *this;}
+    };
+    class const_row {
+        const std::vector<T> * vec;
+        unsigned ypos;
+        unsigned size;
+    public:
+        const_row(const std::vector<T> *v, unsigned y, unsigned s): vec(v), ypos(y), size(s) {}
+        const T& operator[](unsigned idx) const { 
+            if (idx >= size) throw std::out_of_range("Vector2D index out of range");
+            return (*vec)[ypos+idx];
+        }
+        row& operator=(std::vector<T> v) {std::copy(v.begin(), v.begin() + (v.size() > size ? v.size() : size), vec->begin() + ypos); return *this;}
+        row& operator=(row v) {std::copy(v.vec->begin() + v.ypos, v.vec->begin() + v.ypos + v.size, vec->begin() + ypos); return *this;}
+    };
+    vector2d(): width(0), height(0), vec() {}
+    vector2d(unsigned w, unsigned h, T v = T()): width(w), height(h), vec((size_t)w*h, v) {}
+    row operator[](unsigned idx) {
+        if (idx >= height) throw std::out_of_range("Vector2D index out of range");
+        return row(&vec, idx * width, width);
+    }
+    const const_row operator[](unsigned idx) const {
+        if (idx >= height) throw std::out_of_range("Vector2D index out of range");
+        return const_row(&vec, idx * width, width);
+    }
+    T& at(unsigned y, unsigned x) {
+        if (y >= height || x >= width) throw std::out_of_range("Vector2D index out of range");
+        return vec[y*width+x];
+    }
+    const T& at(unsigned y, unsigned x) const {
+        if (y >= height || x >= width) throw std::out_of_range("Vector2D index out of range");
+        return vec[y*width+x];
+    }
+};
+typedef vector2d<uint8_t> Mat1b;
+typedef vector2d<Vec3b> Mat;
+template<typename T> T min(T a, T b) {return a < b ? a : b;}
+template<typename T> T max(T a, T b) {return a > b ? a : b;}
 
-cl::Platform CLPlatform;
+//cl::Platform CLPlatform;
 bool isOpenCLInitialized = false;
 static const std::string hexstr = "0123456789abcdef";
 static const std::vector<Vec3b> defaultPalette = {
@@ -385,7 +476,7 @@ __kernel void toCCPixel(__global uchar * colors, __global uchar * character, __g
 void initCL() {
     if (isOpenCLInitialized) return;
     isOpenCLInitialized = true;
-    try {
+    /*try {
         // Filter for a 2.0 or newer platform and set it as the default
         std::vector<cl::Platform> platforms;
         cl::Platform::get(&platforms);
@@ -410,7 +501,7 @@ void initCL() {
         }
     } catch (cl::Error& e) {
         std::cerr << "OpenCL error: " << e.what() << " (" << e.err() << "). Falling back on CPU computation.\n";
-    }
+    }*/
 }
 
 static std::vector<Vec3b> medianCut(std::vector<Vec3b>& pal, int num) {
@@ -419,7 +510,7 @@ static std::vector<Vec3b> medianCut(std::vector<Vec3b>& pal, int num) {
         for (const Vec3b& v : pal) {sum[0] += v[0]; sum[1] += v[1]; sum[2] += v[2];}
         return {Vec3b(sum / (double)pal.size())};
     } else {
-        Vec2b red = {255, 0}, green = {255, 0}, blue = {255, 0};
+        uint8_t red[2] = {255, 0}, green[2] = {255, 0}, blue[2] = {255, 0};
         for (const Vec3b& v : pal) {
             red[0] = min(v[0], red[0]); red[1] = max(v[0], red[1]);
             green[0] = min(v[1], green[0]); green[1] = max(v[1], green[1]);
@@ -448,9 +539,9 @@ std::vector<Vec3b> reducePalette(const Mat& image, int numColors) {
     int e = 0;
     if (frexp(numColors, &e) > 0.5) throw std::invalid_argument("color count must be a power of 2");
     std::vector<Vec3b> pal;
-    for (int y = 0; y < image.rows; y++)
-        for (int x = 0; x < image.cols; x++)
-            pal.push_back(image.at<Vec3b>(y, x));
+    for (int y = 0; y < image.height; y++)
+        for (int x = 0; x < image.width; x++)
+            pal.push_back(Vec3b(image.at(y, x)));
     std::vector<Vec3b> uniq(pal);
     uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
     if (numColors >= uniq.size()) return uniq;
@@ -477,25 +568,25 @@ static void thresholdWorker(const Mat * in, Mat * out, const std::vector<Vec3b> 
         int row = queue->front();
         queue->pop();
         mtx->unlock();
-        for (int x = 0; x < in->cols; x++) out->at<Vec3b>(row, x) = nearestColor(*palette, in->at<Vec3b>(row, x));
+        for (int x = 0; x < in->width; x++) out->at(row, x) = nearestColor(*palette, in->at(row, x));
     }
 }
 
 Mat thresholdImage(const Mat& image, const std::vector<Vec3b>& palette) {
-    Mat output(image.rows, image.cols, CV_8UC3);
+    Mat output(image.width, image.height);
     initCL();
-    if (CLPlatform() && false) {
+    if (/*CLPlatform() &&*/ false) {
         // Use OpenCL for computation
     } else {
         // Use normal CPU for computation
-        std::queue<int> rows;
+        std::queue<int> height;
         std::mutex mtx;
         std::vector<std::thread*> thread_pool;
         unsigned nthreads = std::thread::hardware_concurrency();
         if (!nthreads) nthreads = 8; // default if no value is available
         mtx.lock(); // pause threads until queue is filled
-        for (int i = 0; i < nthreads; i++) thread_pool.push_back(new std::thread(thresholdWorker, &image, &output, &palette, &rows, &mtx));
-        for (int i = 0; i < image.rows; i++) rows.push(i);
+        for (int i = 0; i < nthreads; i++) thread_pool.push_back(new std::thread(thresholdWorker, &image, &output, &palette, &height, &mtx));
+        for (int i = 0; i < image.height; i++) height.push(i);
         mtx.unlock(); // release threads to start working
         for (int i = 0; i < nthreads; i++) {thread_pool[i]->join(); delete thread_pool[i];}
     }
@@ -503,17 +594,17 @@ Mat thresholdImage(const Mat& image, const std::vector<Vec3b>& palette) {
 }
 
 Mat ditherImage(Mat image, const std::vector<Vec3b>& palette) {
-    for (int y = 0; y < image.rows; y++) {
-        for (int x = 0; x < image.cols; x++) {
-            Vec3b c = image.at<Vec3b>(y, x);
+    for (int y = 0; y < image.height; y++) {
+        for (int x = 0; x < image.width; x++) {
+            Vec3b c = image.at(y, x);
             Vec3b newpixel = nearestColor(palette, c);
-            image.at<Vec3b>(y, x) = newpixel;
+            image.at(y, x) = newpixel;
             Vec3i err = Vec3i(c) - Vec3i(newpixel);
-            if (x < image.cols - 1) image.at<Vec3b>(y, x + 1) += err * (7.0/16.0);
-            if (y < image.rows - 1) {
-                if (x > 1) image.at<Vec3b>(y + 1, x - 1) += err * (3.0/16.0);
-                image.at<Vec3b>(y + 1, x) += err * (5.0/16.0);
-                if (x < image.cols - 1) image.at<Vec3b>(y + 1, x + 1) += err * (1.0/16.0);
+            if (x < image.width - 1) image.at(y, x + 1) += err * (7.0/16.0);
+            if (y < image.height - 1) {
+                if (x > 1) image.at(y + 1, x - 1) += err * (3.0/16.0);
+                image.at(y + 1, x) += err * (5.0/16.0);
+                if (x < image.width - 1) image.at(y + 1, x + 1) += err * (1.0/16.0);
             }
         }
     }
@@ -521,12 +612,10 @@ Mat ditherImage(Mat image, const std::vector<Vec3b>& palette) {
 }
 
 Mat1b rgbToPaletteImage(const Mat& image, const std::vector<Vec3b>& palette) {
-    Mat1b output(image.rows, image.cols);
-    for (int y = 0; y < image.rows; y++) {
-        for (int x = 0; x < image.cols; x++) {
-            output.at<uint8_t>(y, x) = std::find(palette.begin(), palette.end(), image.at<Vec3b>(y, x)) - palette.begin();
-        }
-    }
+    Mat1b output(image.width, image.height);
+    for (int y = 0; y < image.height; y++)
+        for (int x = 0; x < image.width; x++)
+            output.at(y, x) = std::find(palette.begin(), palette.end(), image.at(y, x)) - palette.begin();
     return output;
 }
 
@@ -544,23 +633,23 @@ static void ccImageWorker(uchar * colors, uchar * character, uchar * color, ucha
     }
 }
 
-void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols) {
+void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** width) {
     // Create the input and output data
-    uchar * colors = new uchar[input.rows * input.cols];
-    for (int y = 0; y < input.rows - input.rows % 3; y++) {
-        for (int x = 0; x < input.cols - input.cols % 2; x+=2) {
+    uchar * colors = new uchar[input.height * input.width];
+    for (int y = 0; y < input.height - input.height % 3; y++) {
+        for (int x = 0; x < input.width - input.width % 2; x+=2) {
             if (input[y][x] > 15) throw std::runtime_error("Too many colors (1)");
             if (input[y][x+1] > 15) throw std::runtime_error("Too many colors (2)");
-            colors[(y-y%3)*input.cols + x*3 + (y%3)*2] = input[y][x];
-            colors[(y-y%3)*input.cols + x*3 + (y%3)*2 + 1] = input[y][x+1];
+            colors[(y-y%3)*input.width + x*3 + (y%3)*2] = input[y][x];
+            colors[(y-y%3)*input.width + x*3 + (y%3)*2 + 1] = input[y][x+1];
         }
     }
-    *chars = new uchar[(input.rows / 3) * (input.cols / 2)];
-    *cols = new uchar[(input.rows / 3) * (input.cols / 2)];
+    *chars = new uchar[(input.height / 3) * (input.width / 2)];
+    *width = new uchar[(input.height / 3) * (input.width / 2)];
     uchar3 * pal = new uchar3[palette.size()];
     for (int i = 0; i < palette.size(); i++) pal[i] = {palette[i][0], palette[i][1], palette[i][2]};
     initCL();
-    if (CLPlatform() && false) {
+    if (/*CLPlatform() &&*/ false) {
         // Use OpenCL for computation
     } else {
         // Use normal CPU for computation
@@ -570,8 +659,8 @@ void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** 
         unsigned nthreads = std::thread::hardware_concurrency();
         if (!nthreads) nthreads = 8; // default if no value is available
         mtx.lock(); // pause threads until queue is filled
-        for (int i = 0; i < nthreads; i++) thread_pool.push_back(new std::thread(ccImageWorker, colors, *chars, *cols, pal, &offsets, &mtx));
-        for (int i = 0; i < (input.rows / 3) * (input.cols / 2); i++) offsets.push(i);
+        for (int i = 0; i < nthreads; i++) thread_pool.push_back(new std::thread(ccImageWorker, colors, *chars, *width, pal, &offsets, &mtx));
+        for (int i = 0; i < (input.height / 3) * (input.width / 2); i++) offsets.push(i);
         mtx.unlock(); // release threads to start working
         for (int i = 0; i < nthreads; i++) {thread_pool[i]->join(); delete thread_pool[i];}
     }
@@ -664,6 +753,12 @@ std::string makeRawImage(const uchar * screen, const uchar * colors, const std::
     }
 }
 
+static std::string avErrorString(int err) {
+    char errstr[256];
+    av_strerror(err, errstr, 256);
+    return std::string(errstr);
+}
+
 class HelpException: public OptionException {
 public:
     virtual const char * className() const noexcept {return "HelpException";}
@@ -719,62 +814,178 @@ int main(int argc, const char * argv[]) {
         return 0;
     }
 
-    VideoCapture cap(input);
+    AVFormatContext * format_ctx = NULL;
+    AVCodecContext * video_codec_ctx = NULL, * audio_codec_ctx = NULL;
+    AVCodec * video_codec = NULL, * audio_codec = NULL;
+    SwsContext * resize_ctx = NULL;
+    int error, video_stream = -1, audio_stream = -1;
+    // Open video file
+    if ((error = avformat_open_input(&format_ctx, input.c_str(), NULL, NULL)) < 0) {
+        std::cerr << "Could not open input file: " << avErrorString(error) << "\n";
+        return error;
+    }
+    if ((error = avformat_find_stream_info(format_ctx, NULL)) < 0) {
+        std::cerr << "Could not read stream info: " << avErrorString(error) << "\n";
+        avformat_close_input(&format_ctx);
+        return error;
+    }
+    // Search for video (and audio?) stream indexes
+    for (int i = 0; i < format_ctx->nb_streams && (video_stream < 0 || audio_stream < 0); i++) {
+        if (video_stream < 0 && format_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) video_stream = i;
+        else if (audio_stream < 0 && format_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) audio_stream = i;
+    }
+    if (video_stream < 0) {
+        std::cerr << "Could not find any video streams\n";
+        avformat_close_input(&format_ctx);
+        return 2;
+    }
+    // Open the video decoder
+    if (!(video_codec = avcodec_find_decoder(format_ctx->streams[video_stream]->codecpar->codec_id))) {
+        std::cerr << "Could not find video codec\n";
+        avformat_close_input(&format_ctx);
+        return 2;
+    }
+    if (!(video_codec_ctx = avcodec_alloc_context3(video_codec))) {
+        std::cerr << "Could not allocate video codec context\n";
+        avformat_close_input(&format_ctx);
+        return 2;
+    }
+    if ((error = avcodec_parameters_to_context(video_codec_ctx, format_ctx->streams[video_stream]->codecpar)) < 0) {
+        std::cerr << "Could not initialize video codec parameters: " << avErrorString(error) << "\n";
+        avcodec_free_context(&video_codec_ctx);
+        avformat_close_input(&format_ctx);
+        return error;
+    }
+    if ((error = avcodec_open2(video_codec_ctx, video_codec, NULL)) < 0) {
+        std::cerr << "Could not open video codec: " << avErrorString(error) << "\n";
+        avcodec_free_context(&video_codec_ctx);
+        avformat_close_input(&format_ctx);
+        return error;
+    }
+    // Open the audio decoder if present
+    if (audio_stream >= 0) {
+        if (!(audio_codec = avcodec_find_decoder(format_ctx->streams[audio_stream]->codecpar->codec_id))) {
+            std::cerr << "Could not find audio codec\n";
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if (!(audio_codec_ctx = avcodec_alloc_context3(audio_codec))) {
+            std::cerr << "Could not allocate audio codec context\n";
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if ((error = avcodec_parameters_to_context(audio_codec_ctx, format_ctx->streams[audio_stream]->codecpar)) < 0) {
+            std::cerr << "Could not initialize audio codec parameters: " << avErrorString(error) << "\n";
+            avcodec_free_context(&audio_codec_ctx);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return error;
+        }
+        if ((error = avcodec_open2(audio_codec_ctx, audio_codec, NULL)) < 0) {
+            std::cerr << "Could not open audio codec: " << avErrorString(error) << "\n";
+            avcodec_free_context(&audio_codec_ctx);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return error;
+        }
+    }
+    // Initialize packets/frames
+    AVPacket * packet = av_packet_alloc();
+    AVFrame * frame = av_frame_alloc();
+
     std::string rawtmp, luatmp;
     std::ofstream outfile;
     if (output != "-" && output != "") {
         outfile.open(output);
         if (!outfile.good()) {
             std::cerr << "Could not open output file!\n";
+            av_frame_free(&frame);
+            av_packet_free(&packet);
+            avcodec_free_context(&video_codec_ctx);
+            if (audio_codec_ctx) avcodec_free_context(&audio_codec_ctx);
+            avformat_close_input(&format_ctx);
             return 1;
         }
     }
     std::ostream& outstream = (output == "-" || output == "") ? std::cout : outfile;
-    if (mode == 1) outstream << "32Vid 1.1\n" << cap.get(CAP_PROP_FPS) << "\n";
-    while (true) {
-        Mat in, out;
-        if (!cap.read(in)) break;
-        if (mode == -1 && !luatmp.empty()) {
-            luatmp = "";
-            outstream << "32Vid 1.1\n" << cap.get(CAP_PROP_FPS) << "\n" << rawtmp;
-            mode = 1;
+    if (mode == 1) outstream << "32Vid 1.1\n" << ((double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den) << "\n";
+    int nframe = 0;
+    while (av_read_frame(format_ctx, packet) >= 0) {
+        if (packet->stream_index == video_stream) {
+            avcodec_send_packet(video_codec_ctx, packet);
+            while ((error = avcodec_receive_frame(video_codec_ctx, frame)) == 0) {
+                std::cerr << "\rframe " << nframe++ << "/" << format_ctx->streams[video_stream]->nb_frames;
+                std::cerr.flush();
+                Mat in(frame->width, frame->height), out;
+                if (resize_ctx == NULL) {
+                    if (width != -1 || height != -1) {
+                        width = width == -1 ? height * ((double)in.width / (double)in.height) : width;
+                        height = height == -1 ? width * ((double)in.height / (double)in.width) : height;
+                    } else {
+                        width = frame->width;
+                        height = frame->height;
+                    }
+                    resize_ctx = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format, width, height, AV_PIX_FMT_BGR24, SWS_BICUBIC, NULL, NULL, NULL);
+                }
+                if (mode == -1 && !luatmp.empty()) {
+                    luatmp = "";
+                    outstream << "32Vid 1.1\n" << ((double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den) << "\n" << rawtmp;
+                    mode = 1;
+                }
+                Mat rs(width, height);
+                uint8_t * data = new uint8_t[width * height * 3];
+                int stride[3] = {width * 3, width * 3, width * 3};
+                uint8_t * ptrs[3] = {data, data + 1, data + 2};
+                sws_scale(resize_ctx, frame->data, frame->linesize, 0, frame->height, ptrs, stride);
+                for (int y = 0; y < height; y++)
+                    for (int x = 0; x < width; x++)
+                        rs.at(y, x) = {data[y*width*3+x*3], data[y*width*3+x*3+1], data[y*width*3+x*3+2]};
+                delete[] data;
+                std::vector<Vec3b> palette;
+                if (useDefaultPalette) palette = defaultPalette;
+                else palette = reducePalette(rs, 16);
+                if (noDither) out = thresholdImage(rs, palette);
+                else out = ditherImage(rs, palette);
+                Mat1b pimg = rgbToPaletteImage(out, palette);
+                uchar *characters, *colors;
+                makeCCImage(pimg, palette, &characters, &colors);
+                switch (mode) {
+                case -1: {
+                    rawtmp = makeRawImage(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    luatmp = makeLuaFile(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    break;
+                } case 0: {
+                    outstream << makeLuaFile(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    break;
+                } case 1: {
+                    outstream << makeRawImage(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    break;
+                } case 2: {
+                    std::cerr << "Unimplemented!\n";
+                    break;
+                } case 3: {
+                    std::cerr << "Unimplemented!\n";
+                    break;
+                }
+                }
+                delete[] characters;
+                delete[] colors;
+            }
+            if (error != AVERROR_EOF && error != AVERROR(EAGAIN)) {
+                std::cerr << "Failed to grab frame: " << avErrorString(error) << "\n";
+            }
+        } else if (packet->stream_index == audio_stream) {
+
         }
-        if (width != -1 || height != -1) {
-            Mat rs;
-            resize(in, rs, Size(width == -1 ? height * ((double)in.cols / (double)in.rows) : width, height == -1 ? width * ((double)in.rows / (double)in.cols) : height));
-            in = rs;
-        }
-        std::vector<Vec3b> palette;
-        if (useDefaultPalette) palette = defaultPalette;
-        else palette = reducePalette(in, 16);
-        if (noDither) out = thresholdImage(in, palette);
-        else out = ditherImage(in, palette);
-        Mat1b pimg = rgbToPaletteImage(out, palette);
-        uchar *characters, *colors;
-        makeCCImage(pimg, palette, &characters, &colors);
-        switch (mode) {
-        case -1: {
-            rawtmp = makeRawImage(characters, colors, palette, pimg.cols / 2, pimg.rows / 3);
-            luatmp = makeLuaFile(characters, colors, palette, pimg.cols / 2, pimg.rows / 3);
-            break;
-        } case 0: {
-            outstream << makeLuaFile(characters, colors, palette, pimg.cols / 2, pimg.rows / 3);
-            break;
-        } case 1: {
-            outstream << makeRawImage(characters, colors, palette, pimg.cols / 2, pimg.rows / 3);
-            break;
-        } case 2: {
-            std::cerr << "Unimplemented!\n";
-            break;
-        } case 3: {
-            std::cerr << "Unimplemented!\n";
-            break;
-        }
-        }
-        delete[] characters;
-        delete[] colors;
     }
     if (!luatmp.empty()) outstream << luatmp;
     if (outfile.is_open()) outfile.close();
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    avcodec_free_context(&video_codec_ctx);
+    if (audio_codec_ctx) avcodec_free_context(&audio_codec_ctx);
+    avformat_close_input(&format_ctx);
     return 0;
 }

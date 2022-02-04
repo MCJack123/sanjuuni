@@ -4,13 +4,12 @@ Converts images and videos into a format that can be displayed in ComputerCraft.
 ## Building
 Requirements:
 * C++11 or later compiler
-* OpenCV
-* OpenCL
+* libav
 * Poco
 
 Simply build `sanjuuni.cpp` with a C++ compiler, linking in the following libraries:
 ```
--lopencv_core -lopencv_videoio -lopencv_imgcodecs -lopencv_imgproc -lOpenCL -lpthread -lPocoFoundation -lPocoUtil -lPocoNet
+-lavcodec -lavformat -lavutil -lswscale -lswresample -lpthread -lPocoFoundation -lPocoUtil -lPocoNet
 ```
 
 ## Usage
@@ -30,4 +29,4 @@ Simply build `sanjuuni.cpp` with a C++ compiler, linking in the following librar
 ```
 
 ## License
-sanjuuni is licensed under the MIT license.
+sanjuuni is licensed under the GPL license.
