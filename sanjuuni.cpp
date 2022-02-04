@@ -33,6 +33,12 @@ extern "C" {
 #include <Poco/Util/OptionException.h>
 #include <Poco/Util/IntValidator.h>
 #include <Poco/Util/HelpFormatter.h>
+#include <Poco/Net/NetException.h>
+#include <Poco/Net/WebSocket.h>
+#include <Poco/Net/HTTPServer.h>
+#include <Poco/Net/HTTPRequest.h>
+#include <Poco/Net/HTTPRequestHandler.h>
+#include <Poco/Net/HTTPResponse.h>
 #include <vector>
 #include <chrono>
 #include <iostream>
@@ -43,6 +49,8 @@ extern "C" {
 #include <mutex>
 #include <array>
 #include <queue>
+#include <condition_variable>
+#include <csignal>
 
 // OpenCL polyfills
 #define __global
@@ -76,6 +84,8 @@ int operator==(const float3& a, const float3& b) {return a.x == b.x && a.y == b.
 using namespace std::chrono;
 //using namespace cl;
 using namespace Poco::Util;
+using namespace Poco::Net;
+
 struct Vec3d : public std::array<double, 3> {
     Vec3d() = default;
     template<typename T> Vec3d(const std::array<T, 3>& a) {(*this)[0] = a[0]; (*this)[1] = a[1]; (*this)[2] = a[2];}
@@ -149,7 +159,12 @@ template<typename T> T max(T a, T b) {return a > b ? a : b;}
 
 //cl::Platform CLPlatform;
 bool isOpenCLInitialized = false;
-static const std::string hexstr = "0123456789abcdef";
+static std::vector<std::string> frameStorage;
+static uint8_t * audioStorage = NULL;
+static unsigned audioStorageSize = 0;
+static std::mutex exitLock;
+static std::condition_variable exitNotify;
+static const char * hexstr = "0123456789abcdef";
 static const std::vector<Vec3b> defaultPalette = {
     {0xf0, 0xf0, 0xf0},
     {0xf2, 0xb2, 0x33},
@@ -505,7 +520,7 @@ void initCL() {
     }*/
 }
 
-static std::vector<Vec3b> medianCut(std::vector<Vec3b>& pal, int num) {
+static std::vector<Vec3b> medianCut(std::vector<Vec3b>& pal, int num, int lastComponent) {
     if (num == 1) {
         Vec3d sum = {0, 0, 0};
         for (const Vec3b& v : pal) sum += v;
@@ -522,14 +537,16 @@ static std::vector<Vec3b> medianCut(std::vector<Vec3b>& pal, int num) {
         if (ranges[0] > ranges[1] and ranges[0] > ranges[2]) maxComponent = 0;
         else if (ranges[1] > ranges[2] and ranges[1] > ranges[0]) maxComponent = 1;
         else maxComponent = 2;
-        std::sort(pal.begin(), pal.end(), [maxComponent](const Vec3b& a, const Vec3b& b)->bool {return a[maxComponent] < b[maxComponent];});
-        std::vector<Vec3b> a, b;
-        for (int i = 0; i < pal.size(); i++) {
-            if (i < pal.size() / 2) a.push_back(pal[i]);
-            else b.push_back(pal[i]);
+        if (maxComponent == lastComponent) {
+            if (abs(ranges[maxComponent] - ranges[(maxComponent+1)%3]) < 8 && abs(ranges[maxComponent] - ranges[(maxComponent+2)%3]) < 8)
+                maxComponent = ranges[(maxComponent+1)%3] > ranges[(maxComponent+2)%3] ? (maxComponent + 1) % 3 : (maxComponent + 2) % 3;
+            else if (abs(ranges[maxComponent] - ranges[(maxComponent+1)%3]) < 8) maxComponent = (maxComponent + 1) % 3;
+            else if (abs(ranges[maxComponent] - ranges[(maxComponent+2)%3]) < 8) maxComponent = (maxComponent + 2) % 3;
         }
+        std::sort(pal.begin(), pal.end(), [maxComponent](const Vec3b& a, const Vec3b& b)->bool {return a[maxComponent] < b[maxComponent];});
+        std::vector<Vec3b> a(pal.begin(), pal.begin() + pal.size() / 2), b(pal.begin() + pal.size() / 2, pal.end());
         std::vector<Vec3b> ar, br;
-        std::thread at([&ar, &a, num](){ar = medianCut(a, num / 2);}), bt([&br, &b, num](){br = medianCut(b, num / 2);});
+        std::thread at([&ar, &a, num, maxComponent](){ar = medianCut(a, num / 2, maxComponent);}), bt([&br, &b, num, maxComponent](){br = medianCut(b, num / 2, maxComponent);});
         at.join(); bt.join();
         for (const Vec3b& v : br) ar.push_back(v);
         return ar;
@@ -546,13 +563,13 @@ std::vector<Vec3b> reducePalette(const Mat& image, int numColors) {
     std::vector<Vec3b> uniq(pal);
     uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
     if (numColors >= uniq.size()) return uniq;
-    return medianCut(pal, numColors);
+    return medianCut(pal, numColors, -1);
 }
 
 static Vec3b nearestColor(const std::vector<Vec3b>& palette, const Vec3d& color) {
     double n, dist = 1e100;
     for (int i = 0; i < palette.size(); i++) {
-        const Vec3b& v = palette[i];
+        Vec3d v = palette[i];
         double d = sqrt((v[0] - color[0])*(v[0] - color[0]) + (v[1] - color[1])*(v[1] - color[1]) + (v[2] - color[2])*(v[2] - color[2]));
         if (d < dist) {n = i; dist = d;}
     }
@@ -671,24 +688,25 @@ void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** 
     delete[] colors;
 }
 
-std::string makeLuaFile(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
-    std::string retval = "local image, palette = {\n";
+std::string makeTable(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height, bool compact = false) {
+    std::string retval = compact ? "{" : "{\n";
     for (int y = 0; y < height; y++) {
         std::string text, fg, bg;
         for (int x = 0; x < width; x++) {
             uchar c = characters[y*width+x], cc = colors[y*width+x];
             text += "\\" + std::to_string(c);
-            fg += hexstr.substr(cc & 0xf, 1);
-            bg += hexstr.substr(cc >> 4, 1);
+            fg += hexstr[cc & 0xf];
+            bg += hexstr[cc >> 4];
         }
-        retval += "    {\n        \"" + text + "\",\n        \"" + fg + "\",\n        \"" + bg + "\"\n    },\n";
+        if (compact) retval += "{\"" + text + "\",\"" + fg + "\",\"" + bg + "\"},";
+        else retval += "    {\n        \"" + text + "\",\n        \"" + fg + "\",\n        \"" + bg + "\"\n    },\n";
     }
-    retval += "}, {\n";
+    retval += compact ? "},{" : "}, {\n";
     for (const Vec3b& c : palette) {
-        retval += "    {" + std::to_string(c[2] / 255.0) + ", " + std::to_string(c[1] / 255.0) + ", " + std::to_string(c[0] / 255.0) + "},\n";
+        if (compact) retval += "{" + std::to_string(c[2] / 255.0) + "," + std::to_string(c[1] / 255.0) + "," + std::to_string(c[0] / 255.0) + "},";
+        else retval += "    {" + std::to_string(c[2] / 255.0) + ", " + std::to_string(c[1] / 255.0) + ", " + std::to_string(c[0] / 255.0) + "},\n";
     }
-    retval += "}\n\nfor i, v in ipairs(palette) do term.setPaletteColor(2^(i-1), table.unpack(v)) end\nfor y, r in ipairs(image) do\n    term.setCursorPos(1, y)\n    term.blit(table.unpack(r))\nend\nread()\nfor i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.setCursorPos(1, 1)\nterm.clear()\n";
-    return retval;
+    return retval + "}";
 }
 
 std::string makeRawImage(const uchar * screen, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
@@ -756,6 +774,66 @@ std::string makeRawImage(const uchar * screen, const uchar * colors, const std::
     }
 }
 
+std::string makeLuaFile(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
+    return "local image, palette = " + makeTable(characters, colors, palette, width, height) + "\n\nterm.clear()\nfor i, v in ipairs(palette) do term.setPaletteColor(2^(i-1), table.unpack(v)) end\nfor y, r in ipairs(image) do\n    term.setCursorPos(1, y)\n    term.blit(table.unpack(r))\nend\nread()\nfor i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.setCursorPos(1, 1)\nterm.clear()\n";
+}
+
+class WebSocketServer: public HTTPRequestHandler {
+public:
+    HTTPServer *srv;
+    double *fps;
+    WebSocketServer(HTTPServer *s, double *f): srv(s), fps(f) {}
+    void handleRequest(HTTPServerRequest &request, HTTPServerResponse &response) override {
+        try {
+            WebSocket ws(request, response);
+            char buf[256];
+            int n, flags;
+            do {
+                flags = 0;
+                try {n = ws.receiveFrame(buf, 256, flags);}
+                catch (Poco::TimeoutException &e) {continue;}
+                if (n > 0) {
+                    //std::cout << std::string(buf, n) << "\n";
+                    if (buf[0] == 'v') {
+                        int frame = std::stoi(std::string(buf + 1, n - 1));
+                        if (frame >= frameStorage.size() || frame < 0) ws.sendFrame("!", 1, WebSocket::FRAME_TEXT);
+                        else ws.sendFrame(frameStorage[frame].c_str(), frameStorage[frame].size(), WebSocket::FRAME_BINARY);
+                    } else if (buf[0] == 'a') {
+                        int offset = std::stoi(std::string(buf + 1, n - 1));
+                        if (offset >= audioStorageSize || offset < 0) ws.sendFrame("!", 1, WebSocket::FRAME_TEXT);
+                        else ws.sendFrame(audioStorage + offset, offset + 48000 > audioStorageSize ? audioStorageSize - offset : 48000, WebSocket::FRAME_BINARY);
+                    } else if (buf[0] == 'n') {
+                        std::string data = std::to_string(frameStorage.size());
+                        ws.sendFrame(data.c_str(), data.size(), WebSocket::FRAME_TEXT);
+                    } else if (buf[0] == 'f') {
+                        std::string data = std::to_string(*fps);
+                        ws.sendFrame(data.c_str(), data.size(), WebSocket::FRAME_TEXT);
+                    }
+                }
+            } while (n > 0 && (flags & WebSocket::FRAME_OP_BITMASK) != WebSocket::FRAME_OP_CLOSE);
+            try {ws.shutdown();} catch (...) {}
+        } catch (Poco::Exception &e) {
+            std::cerr << "WebSocket exception: " << e.displayText() << "\n";
+        } catch (std::exception &e) {
+            std::cerr << "WebSocket exception: " << e.what() << "\n";
+        }
+    }
+    class Factory: public HTTPRequestHandlerFactory {
+    public:
+        HTTPServer *srv = NULL;
+        double *fps;
+        Factory(double *f): fps(f) {}
+        HTTPRequestHandler* createRequestHandler(const HTTPServerRequest&) override {
+            return new WebSocketServer(srv, fps);
+        }
+    };
+};
+
+static void sighandler(int signal) {
+    std::unique_lock<std::mutex> lock(exitLock);
+    exitNotify.notify_all();
+}
+
 static std::string avErrorString(int err) {
     char errstr[256];
     av_strerror(err, errstr, 256);
@@ -811,6 +889,7 @@ int main(int argc, const char * argv[]) {
         if (e.className() != "HelpException") std::cerr << e.displayText() << "\n";
         HelpFormatter help(options);
         help.setUnixStyle(true);
+        help.setUsage("[options] -i <input> [-o <output>]");
         help.setCommand(argv[0]);
         help.setHeader("sanjuuni converts images and videos into a format that can be displayed in ComputerCraft.");
         help.format(e.className() == "HelpException" ? std::cout : std::cerr);
@@ -821,6 +900,7 @@ int main(int argc, const char * argv[]) {
     AVCodecContext * video_codec_ctx = NULL, * audio_codec_ctx = NULL;
     AVCodec * video_codec = NULL, * audio_codec = NULL;
     SwsContext * resize_ctx = NULL;
+    SwrContext * resample_ctx = NULL;
     int error, video_stream = -1, audio_stream = -1;
     // Open video file
     if ((error = avformat_open_input(&format_ctx, input.c_str(), NULL, NULL)) < 0) {
@@ -913,11 +993,22 @@ int main(int argc, const char * argv[]) {
         }
     }
     std::ostream& outstream = (output == "-" || output == "") ? std::cout : outfile;
+    HTTPServer * srv;
+    double fps = 0;
+    if (mode == 2) {
+
+    } else if (mode == 3) {
+        srv = new HTTPServer(new WebSocketServer::Factory(&fps), port);
+        srv->start();
+        signal(SIGINT, sighandler);
+    }
+
     int nframe = 0;
     while (av_read_frame(format_ctx, packet) >= 0) {
         if (packet->stream_index == video_stream) {
             avcodec_send_packet(video_codec_ctx, packet);
-            if (nframe == 0 && mode == 1) outstream << "32Vid 1.1\n" << ((double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den) << "\n";
+            fps = (double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den;
+            if (nframe == 0 && mode == 1) outstream << "32Vid 1.1\n" << fps << "\n";
             while ((error = avcodec_receive_frame(video_codec_ctx, frame)) == 0) {
                 std::cerr << "\rframe " << nframe++ << "/" << format_ctx->streams[video_stream]->nb_frames;
                 std::cerr.flush();
@@ -956,11 +1047,8 @@ int main(int argc, const char * argv[]) {
                 } case 1: {
                     outstream << makeRawImage(characters, colors, palette, pimg.width / 2, pimg.height / 3);
                     break;
-                } case 2: {
-                    std::cerr << "Unimplemented!\n";
-                    break;
-                } case 3: {
-                    std::cerr << "Unimplemented!\n";
+                } case 2: case 3: {
+                    frameStorage.push_back("return " + makeTable(characters, colors, palette, pimg.width / 2, pimg.height / 3, true));
                     break;
                 }
                 }
@@ -968,17 +1056,46 @@ int main(int argc, const char * argv[]) {
                 delete[] colors;
             }
             if (error != AVERROR_EOF && error != AVERROR(EAGAIN)) {
-                std::cerr << "Failed to grab frame: " << avErrorString(error) << "\n";
+                std::cerr << "Failed to grab video frame: " << avErrorString(error) << "\n";
             }
         } else if (packet->stream_index == audio_stream) {
-
+            avcodec_send_packet(audio_codec_ctx, packet);
+            while ((error = avcodec_receive_frame(audio_codec_ctx, frame)) == 0) {
+                if (!resample_ctx) resample_ctx = swr_alloc_set_opts(NULL, AV_CH_LAYOUT_MONO, AV_SAMPLE_FMT_U8, 48000, frame->channel_layout, (AVSampleFormat)frame->format, frame->sample_rate, 0, NULL);
+                AVFrame * newframe = av_frame_alloc();
+                newframe->channel_layout = AV_CH_LAYOUT_MONO;
+                newframe->format = AV_SAMPLE_FMT_U8;
+                newframe->sample_rate = 48000;
+                if ((error = swr_convert_frame(resample_ctx, newframe, frame)) < 0) {
+                    std::cerr << "Failed to convert audio: " << avErrorString(error) << "\n";
+                    continue;
+                }
+                audioStorage = (uint8_t*)realloc(audioStorage, audioStorageSize + newframe->nb_samples);
+                memcpy(audioStorage + audioStorageSize, newframe->data[0], newframe->nb_samples);
+                audioStorageSize += newframe->nb_samples;
+                av_frame_free(&newframe);
+            }
+            if (error != AVERROR_EOF && error != AVERROR(EAGAIN)) {
+                std::cerr << "Failed to grab audio frame: " << avErrorString(error) << "\n";
+            }
         }
     }
+    std::cerr << "\rframe " << nframe << "/" << format_ctx->streams[video_stream]->nb_frames << "\n";
     if (outfile.is_open()) outfile.close();
+    if (resize_ctx) sws_freeContext(resize_ctx);
+    if (resample_ctx) swr_free(&resample_ctx);
     av_frame_free(&frame);
     av_packet_free(&packet);
     avcodec_free_context(&video_codec_ctx);
     if (audio_codec_ctx) avcodec_free_context(&audio_codec_ctx);
     avformat_close_input(&format_ctx);
+    if (mode == 2 || mode == 3) {
+        std::cout << "Serving on port " << port << "\n";
+        std::unique_lock<std::mutex> lock(exitLock);
+        exitNotify.wait(lock);
+        srv->stop();
+        delete srv;
+    }
+    if (audioStorage) free(audioStorage);
     return 0;
 }

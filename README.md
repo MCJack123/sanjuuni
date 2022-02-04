@@ -4,7 +4,7 @@ Converts images and videos into a format that can be displayed in ComputerCraft.
 ## Building
 Requirements:
 * C++11 or later compiler
-* libav
+* libav + libswresample (included with FFmpeg)
 * Poco
 
 Simply build `sanjuuni.cpp` with a C++ compiler, linking in the following libraries:
