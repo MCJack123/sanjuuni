@@ -51,6 +51,9 @@ extern "C" {
 #include <queue>
 #include <condition_variable>
 #include <csignal>
+#ifdef USE_SDL
+#include <SDL2/SDL.h>
+#endif
 
 // OpenCL polyfills
 #define __global
@@ -553,17 +556,286 @@ static std::vector<Vec3b> medianCut(std::vector<Vec3b>& pal, int num, int lastCo
     }
 }
 
-std::vector<Vec3b> reducePalette(const Mat& image, int numColors) {
-    int e = 0;
-    if (frexp(numColors, &e) > 0.5) throw std::invalid_argument("color count must be a power of 2");
-    std::vector<Vec3b> pal;
-    for (int y = 0; y < image.height; y++)
-        for (int x = 0; x < image.width; x++)
-            pal.push_back(Vec3b(image.at(y, x)));
-    std::vector<Vec3b> uniq(pal);
-    uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
-    if (numColors >= uniq.size()) return uniq;
-    return medianCut(pal, numColors, -1);
+// BEGIN OCTREE QUANTIZATION CODE
+
+/*
+Octree quantization
+
+Copyright (c) 2006 Michal Molhanec
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute
+it freely, subject to the following restrictions:
+
+  1. The origin of this software must not be misrepresented;
+     you must not claim that you wrote the original software.
+     If you use this software in a product, an acknowledgment
+     in the product documentation would be appreciated but
+     is not required.
+
+  2. Altered source versions must be plainly marked as such,
+     and must not be misrepresented as being the original software.
+
+  3. This notice may not be removed or altered from any
+     source distribution.
+*/
+
+/*
+
+octree.c -- Octree quantization implementation.
+Modified by JackMacWindows for sanjuuni.
+
+*/
+
+#define BITS_USED 8
+
+struct octree_node {
+    uint32_t r, g, b;
+    uint32_t counter;
+    int leaf;
+    int leaf_parent;
+    struct octree_node* subnodes[8];
+    int palette_entry;
+    struct octree_node* prev;
+    struct octree_node* next;
+    struct octree_node* parent;
+};
+
+struct octree_tree {
+    struct octree_node* root;
+    uint32_t number_of_leaves;
+    struct octree_node* leaves_parents;
+};
+
+static struct octree_node* octree_create_node(struct octree_node* parent) {
+    struct octree_node* n = (struct octree_node*) calloc(1, sizeof(struct octree_node));
+    if (n) {
+        n->parent = parent;
+    }
+    return n;
+}
+
+/* 0 on error */
+static int octree_insert_pixel(struct octree_tree* tree, int r, int g, int b) {
+    int mask;
+    int r_bit, g_bit, b_bit;
+    int index;
+    int i;
+    struct octree_node* node = tree->root;
+    for (i = BITS_USED; i >= 0; i--) {
+        mask =  1 << i;
+        r_bit = (r & mask) >> i;
+        g_bit = (g & mask) >> i;
+        b_bit = (b & mask) >> i;
+        index = (r_bit << 2) + (g_bit << 1) + b_bit;
+        if (!node->subnodes[index]) {
+            node->subnodes[index] = octree_create_node(node);
+            if (!node->subnodes[index]) {
+                return 0;
+            }
+        }
+        node = node->subnodes[index];
+    }
+    if (node->counter == 0) {
+        tree->number_of_leaves++;
+        node->leaf = 1;
+        if (!node->parent->leaf_parent) {
+            node->parent->leaf_parent = 1;
+            if (tree->leaves_parents) {
+                tree->leaves_parents->prev = node->parent;
+            }
+            node->parent->next = tree->leaves_parents;
+            tree->leaves_parents = node->parent;
+        }
+    }
+    node->counter++;
+    node->r += r;
+    node->g += g;
+    node->b += b;
+    return 1;
+}
+
+static uint32_t octree_calc_counters(struct octree_node* node) {
+    int i;
+    if (node->leaf) {
+        return node->counter;
+    }
+    for (i = 0; i < 8; i++) {
+        if (node->subnodes[i]) {
+            node->counter += octree_calc_counters(node->subnodes[i]);
+        }
+    }
+    return node->counter;
+}
+
+static struct octree_node* octree_find_smallest(struct octree_tree* tree, uint32_t* last_min) {
+    struct octree_node* min = tree->leaves_parents;
+    struct octree_node* n = tree->leaves_parents->next;
+
+    while (n != 0) {
+        if (min->counter == *last_min) {
+            return min;
+        }
+        if (n->counter < min->counter) {
+            min = n;
+        }
+        n = n->next;
+    }
+    *last_min = min->counter;
+    return min;
+}
+
+static void octree_reduce(struct octree_tree* tree) {
+    struct octree_node* n;
+    uint32_t min = 1;
+    int i;
+    if (tree->number_of_leaves <= 16) {
+        return;
+    }
+    octree_calc_counters(tree->root);
+    while (tree->number_of_leaves > 16) {
+        n = octree_find_smallest(tree, &min);
+        for (i = 0; i < 8; i++) {
+            if (n->subnodes[i]) {
+                n->r += n->subnodes[i]->r;
+                n->g += n->subnodes[i]->g;
+                n->b += n->subnodes[i]->b;
+                free(n->subnodes[i]);
+                n->subnodes[i] = 0;
+                tree->number_of_leaves--;
+            }
+        }
+        tree->number_of_leaves++;
+        n->leaf = 1;
+        if (!n->parent->leaf_parent) {
+            n->parent->leaf_parent = 1;
+            n->parent->next = n->next;
+            n->parent->prev = n->prev;
+            if (n->prev) {
+                n->prev->next = n->parent;
+            } else {
+                tree->leaves_parents = n->parent;
+            }
+            if (n->next) {
+                n->next->prev = n->parent;
+            }
+        } else {
+            if (n->prev) {
+                n->prev->next = n->next;
+            } else {
+                tree->leaves_parents = n->next;
+            }
+            if (n->next) {
+                n->next->prev = n->prev;
+            }
+        }
+    }
+}
+
+static void octree_fill_palette(std::vector<Vec3b>& pal, int* index, struct octree_tree* tree) {
+    int i;
+    struct octree_node* n = tree->leaves_parents;
+    while (n) {
+        for (i = 0; i < 8; i++) {
+            if (n->subnodes[i] && n->subnodes[i]->leaf) {
+                pal[*index][0] = n->subnodes[i]->r / n->subnodes[i]->counter;
+                pal[*index][1] = n->subnodes[i]->g / n->subnodes[i]->counter;
+                pal[*index][2] = n->subnodes[i]->b / n->subnodes[i]->counter;
+                n->subnodes[i]->palette_entry = (*index)++;
+            }
+        }
+        n = n->next;
+    }
+}
+
+static int octree_get_index(struct octree_node* node, int r, int g, int b, int i) {
+    int mask, index;
+    int r_bit, g_bit, b_bit;
+restart:
+    if (node->leaf) {
+        return node->palette_entry;
+    }
+    mask =  1 << i;
+    r_bit = (r & mask) >> i;
+    g_bit = (g & mask) >> i;
+    b_bit = (b & mask) >> i;
+    index = (r_bit << 2) + (g_bit << 1) + b_bit;
+    i--;
+    node = node->subnodes[index];
+    goto restart;
+}
+
+static void octree_free_node(struct octree_node* node) {
+    int i;
+    for (i = 0; i < 8; i++) {
+        if (node->subnodes[i]) {
+            octree_free_node(node->subnodes[i]);
+        }
+    }
+    free(node);
+}
+
+std::vector<Vec3b> octree_quantize(const Mat& bmp, octree_tree * tree) {
+    int x, y;
+    int i;
+    int bpp;
+    int r, g, b;
+    std::vector<Vec3b> pal(16);
+
+    tree->number_of_leaves = 0;
+    tree->root = octree_create_node(0);
+    tree->leaves_parents = 0;
+    if (!tree->root) {
+        return {};
+    }
+
+    for (y = 0; y < bmp.height; y++) {
+        for (x = 0; x < bmp.width; x++) {
+            if (!octree_insert_pixel(tree, bmp[y][x][0], bmp[y][x][1], bmp[y][x][2])) {
+                octree_free_node(tree->root);
+                return {};
+            }
+        }
+    }
+    
+    octree_reduce(tree);
+    if (tree->number_of_leaves == 16) {
+        i = 0;
+    } else {
+        i = 1;
+        /* If there is space, left color with index 0 black */
+        pal[0][0] = pal[0][1] = pal[0][2] = 0;
+    }
+    octree_fill_palette(pal, &i, tree);
+    while (i < 16) {
+        pal[i][0] = pal[i][0] = pal[i][0] = 0;
+        i++;
+    }
+
+    return pal;
+}
+
+// END OCTREE QUANTIZATION CODE
+
+std::vector<Vec3b> reducePalette(const Mat& image, int numColors, octree_tree * octree) {
+    if (octree) {
+        return octree_quantize(image, octree); // TODO: use the tree search
+    } else {
+        int e = 0;
+        if (frexp(numColors, &e) > 0.5) throw std::invalid_argument("color count must be a power of 2");
+        std::vector<Vec3b> pal;
+        for (int y = 0; y < image.height; y++)
+            for (int x = 0; x < image.width; x++)
+                pal.push_back(Vec3b(image.at(y, x)));
+        std::vector<Vec3b> uniq(pal);
+        uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
+        if (numColors >= uniq.size()) return uniq;
+        return medianCut(pal, numColors, -1);
+    }
 }
 
 static Vec3b nearestColor(const std::vector<Vec3b>& palette, const Vec3d& color) {
@@ -653,20 +925,21 @@ static void ccImageWorker(uchar * colors, uchar * character, uchar * color, ucha
     }
 }
 
-void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** width) {
+void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols) {
     // Create the input and output data
-    uchar * colors = new uchar[input.height * input.width];
-    for (int y = 0; y < input.height - input.height % 3; y++) {
-        for (int x = 0; x < input.width - input.width % 2; x+=2) {
+    int width = input.width - input.width % 2, height = input.height - input.height % 3;
+    uchar * colors = new uchar[height * width];
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x+=2) {
             if (input[y][x] > 15) throw std::runtime_error("Too many colors (1)");
             if (input[y][x+1] > 15) throw std::runtime_error("Too many colors (2)");
-            colors[(y-y%3)*input.width + x*3 + (y%3)*2] = input[y][x];
-            colors[(y-y%3)*input.width + x*3 + (y%3)*2 + 1] = input[y][x+1];
+            colors[(y-y%3)*width + x*3 + (y%3)*2] = input[y][x];
+            colors[(y-y%3)*width + x*3 + (y%3)*2 + 1] = input[y][x+1];
         }
     }
-    *chars = new uchar[(input.height / 3) * (input.width / 2)];
-    *width = new uchar[(input.height / 3) * (input.width / 2)];
-    uchar3 * pal = new uchar3[palette.size()];
+    *chars = new uchar[(height / 3) * (width / 2)];
+    *cols = new uchar[(height / 3) * (width / 2)];
+    uchar3 * pal = new uchar3[16];
     for (int i = 0; i < palette.size(); i++) pal[i] = {palette[i][0], palette[i][1], palette[i][2]};
     initCL();
     if (/*CLPlatform() &&*/ false) {
@@ -679,8 +952,8 @@ void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** 
         unsigned nthreads = std::thread::hardware_concurrency();
         if (!nthreads) nthreads = 8; // default if no value is available
         mtx.lock(); // pause threads until queue is filled
-        for (int i = 0; i < nthreads; i++) thread_pool.push_back(new std::thread(ccImageWorker, colors, *chars, *width, pal, &offsets, &mtx));
-        for (int i = 0; i < (input.height / 3) * (input.width / 2); i++) offsets.push(i);
+        for (int i = 0; i < nthreads; i++) thread_pool.push_back(new std::thread(ccImageWorker, colors, *chars, *cols, pal, &offsets, &mtx));
+        for (int i = 0; i < (height / 3) * (width / 2); i++) offsets.push(i);
         mtx.unlock(); // release threads to start working
         for (int i = 0; i < nthreads; i++) {thread_pool[i]->join(); delete thread_pool[i];}
     }
@@ -856,6 +1129,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("websocket", "w", "Serve a WebSocket that sends the image/video with audio", false, "port", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("default-palette", "p", "Use the default CC palette instead of generating an optimized one"));
     options.addOption(Option("threshold", "t", "Use thresholding instead of dithering"));
+    options.addOption(Option("octree", "8", "Use octree for higher quality color conversion (slower)"));
     options.addOption(Option("width", "w", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("height", "H", "Resize the image to the specified height", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("help", "h", "Show this help"));
@@ -863,7 +1137,7 @@ int main(int argc, const char * argv[]) {
     argparse.setUnixStyle(true);
 
     std::string input, output;
-    bool useDefaultPalette = false, noDither = false;
+    bool useDefaultPalette = false, noDither = false, useOctree = false;
     int mode = -1, port;
     int width = -1, height = -1;
     try {
@@ -878,6 +1152,7 @@ int main(int argc, const char * argv[]) {
                 else if (option == "websocket") {mode = 3; port = std::stoi(arg);}
                 else if (option == "default-palette") useDefaultPalette = true;
                 else if (option == "threshold") noDither = true;
+                else if (option == "octree") useOctree = true;
                 else if (option == "width") width = std::stoi(arg);
                 else if (option == "height") height = std::stoi(arg);
                 else if (option == "help") throw HelpException();
@@ -1003,6 +1278,12 @@ int main(int argc, const char * argv[]) {
         signal(SIGINT, sighandler);
     }
 
+#ifdef USE_SDL
+    SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
+    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Window * win = NULL;
+#endif
+
     int nframe = 0;
     while (av_read_frame(format_ctx, packet) >= 0) {
         if (packet->stream_index == video_stream) {
@@ -1033,8 +1314,10 @@ int main(int argc, const char * argv[]) {
                         rs.at(y, x) = {data[y*width*3+x*3], data[y*width*3+x*3+1], data[y*width*3+x*3+2]};
                 delete[] data;
                 std::vector<Vec3b> palette;
+                octree_tree tree;
                 if (useDefaultPalette) palette = defaultPalette;
-                else palette = reducePalette(rs, 16);
+                else palette = reducePalette(rs, 16, useOctree ? &tree : NULL);
+                if (useOctree && !useDefaultPalette) octree_free_node(tree.root);
                 if (noDither) out = thresholdImage(rs, palette);
                 else out = ditherImage(rs, palette);
                 Mat1b pimg = rgbToPaletteImage(out, palette);
@@ -1052,6 +1335,14 @@ int main(int argc, const char * argv[]) {
                     break;
                 }
                 }
+#ifdef USE_SDL
+                if (!win) win = SDL_CreateWindow("Image", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_SHOWN);
+                SDL_Surface * surf = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_BGRA32);
+                for (int i = 0; i < out.vec.size(); i++) ((uint32_t*)surf->pixels)[i] = 0xFF000000 | (out.vec[i][2] << 16) | (out.vec[i][1] << 8) | out.vec[i][0];
+                SDL_BlitSurface(surf, NULL, SDL_GetWindowSurface(win), NULL);
+                SDL_FreeSurface(surf);
+                SDL_UpdateWindowSurface(win);
+#endif
                 delete[] characters;
                 delete[] colors;
             }
@@ -1097,5 +1388,14 @@ int main(int argc, const char * argv[]) {
         delete srv;
     }
     if (audioStorage) free(audioStorage);
+#ifdef USE_SDL
+    while (true) {
+        SDL_Event e;
+        SDL_WaitEvent(&e);
+        if (e.type == SDL_QUIT) break;
+    }
+    SDL_DestroyWindow(win);
+    SDL_Quit();
+#endif
     return 0;
 }

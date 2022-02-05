@@ -14,18 +14,28 @@ Simply build `sanjuuni.cpp` with a C++ compiler, linking in the following librar
 
 ## Usage
 ```
+usage: .anjuuni [options] -i <input> [-o <output>]
+sanjuuni converts images and videos into a format that can be displayed in 
+ComputerCraft.
+
 -ifile, --input=file      Input image or video
 -opath, --output=path     Output file path
--l, --lua                 Output a Lua script file (default for images)
--r, --raw                 Output a rawmode-based image/video file (required 
-                          for videos)
--hport, --http=port       Serve an HTTP server that has each frame split up + 
+-l, --lua                 Output a Lua script file (default for images; only 
+                          does one frame)
+-r, --raw                 Output a rawmode-based image/video file (default for
+                          videos)
+-sport, --http=port       Serve an HTTP server that has each frame split up + 
                           a player program
 -wport, --websocket=port  Serve a WebSocket that sends the image/video with 
                           audio
 -p, --default-palette     Use the default CC palette instead of generating an 
                           optimized one
--h, --help                Show help
+-t, --threshold           Use thresholding instead of dithering
+-8, --octree              Use octree for higher quality color conversion 
+                          (slower)
+-wsize, --width=size      Resize the image to the specified width
+-Hsize, --height=size     Resize the image to the specified height
+-h, --help                Show this help
 ```
 
 ## License
