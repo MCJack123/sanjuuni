@@ -7,14 +7,15 @@ Requirements:
 * libav + libswresample (included with FFmpeg)
 * Poco
 
-Simply build `sanjuuni.cpp` with a C++ compiler, linking in the following libraries:
-```
--lavcodec -lavformat -lavutil -lswscale -lswresample -lpthread -lPocoFoundation -lPocoUtil -lPocoNet
+To build:
+```sh
+./configure
+make
 ```
 
 ## Usage
 ```
-usage: .anjuuni [options] -i <input> [-o <output>]
+usage: sanjuuni [options] -i <input> [-o <output>]
 sanjuuni converts images and videos into a format that can be displayed in 
 ComputerCraft.
 

@@ -2,3 +2,7 @@
 sanjuuni
 *.exe
 test*
+autom4te.cache
+Makefile
+config.*
+configure~

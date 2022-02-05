@@ -1,0 +1,11 @@
+CXX=@CXX@
+CPPFLAGS=@CPPFLAGS@
+CXXFLAGS=@CFLAGS@ @CXXFLAGS@
+LDFLAGS=@LDFLAGS@
+LIBS=@LIBS@
+
+sanjuuni: sanjuuni.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+clean:
+	rm sanjuuni
