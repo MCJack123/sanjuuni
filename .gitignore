@@ -6,3 +6,9 @@ autom4te.cache
 Makefile
 config.*
 configure~
+*.user
+.vs
+x86
+x64
+ARM64
+vcpkg_installed

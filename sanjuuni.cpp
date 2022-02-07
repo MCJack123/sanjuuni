@@ -159,6 +159,8 @@ public:
 };
 typedef vector2d<uint8_t> Mat1b;
 typedef vector2d<Vec3b> Mat;
+#undef min
+#undef max
 template<typename T> T min(T a, T b) {return a < b ? a : b;}
 template<typename T> T max(T a, T b) {return a > b ? a : b;}
 
@@ -1239,6 +1241,7 @@ int main(int argc, const char * argv[]) {
         help.setUsage("[options] -i <input> [-o <output>]");
         help.setCommand(argv[0]);
         help.setHeader("sanjuuni converts images and videos into a format that can be displayed in ComputerCraft.");
+        help.setFooter("sanjuuni is licensed under the GPL license. Get the source at https://github.com/MCJack123/sanjuuni.");
         help.format(e.className() == "HelpException" ? std::cout : std::cerr);
         return 0;
     }
@@ -1340,7 +1343,7 @@ int main(int argc, const char * argv[]) {
         }
     }
     std::ostream& outstream = (output == "-" || output == "") ? std::cout : outfile;
-    HTTPServer * srv;
+    HTTPServer * srv = NULL;
     double fps = 0;
     if (mode == 2) {
         srv = new HTTPServer(new HTTPListener::Factory(&fps), port);

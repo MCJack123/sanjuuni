@@ -1,0 +1,14 @@
+{
+    "name": "sanjuuni",
+    "version-string": "1.0",
+    "description": "Converts images and videos into a format that can be displayed in ComputerCraft.",
+    "dependencies": [
+        "poco",
+        {
+            "name": "ffmpeg",
+            "default-features": true
+        }
+    ],
+    "default-features": [],
+    "features": {}
+}

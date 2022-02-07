@@ -4,7 +4,7 @@ Converts images and videos into a format that can be displayed in ComputerCraft.
 ## Building
 Requirements:
 * C++11 or later compiler
-* libav + libswresample (included with FFmpeg)
+* FFmpeg libraries
 * Poco
 
 To build:
@@ -12,6 +12,8 @@ To build:
 ./configure
 make
 ```
+
+On Windows, use the Visual Studio solution with vcpkg to build.
 
 ## Usage
 ```
