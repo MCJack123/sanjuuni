@@ -34,11 +34,13 @@ extern "C" {
 #include <Poco/Util/IntValidator.h>
 #include <Poco/Util/HelpFormatter.h>
 #include <Poco/Net/NetException.h>
-#include <Poco/Net/WebSocket.h>
-#include <Poco/Net/HTTPServer.h>
 #include <Poco/Net/HTTPRequest.h>
 #include <Poco/Net/HTTPRequestHandler.h>
 #include <Poco/Net/HTTPResponse.h>
+#include <Poco/Net/HTTPServer.h>
+#include <Poco/Net/HTTPServerRequest.h>
+#include <Poco/Net/HTTPServerResponse.h>
+#include <Poco/Net/WebSocket.h>
 #include <vector>
 #include <chrono>
 #include <iostream>
@@ -186,6 +188,7 @@ static const std::vector<Vec3b> defaultPalette = {
     {0xcc, 0x4c, 0x4c},
     {0x11, 0x11, 0x11}
 };
+static const std::string playLua = "'local function b(c)local d,e=http.get('http://'..a..c,nil,true)if not d then error(e)end;local f=d.readAll()d.close()return f end;local g=textutils.unserializeJSON(b('/info'))local h,i={},{}local j=peripheral.find'speaker'term.clear()local k=2;parallel.waitForAll(function()for l=0,g.length-1 do h[l]=b('/video/'..l)if k>0 then k=k-1 end end end,function()for l=0,g.length/g.fps do i[l]=b('/audio/'..l)if k>0 then k=k-1 end end end,function()while k>0 do os.pullEvent()end;local m=os.epoch'utc'for l=0,g.length-1 do while not h[l]do os.pullEvent()end;local n=h[l]h[l]=nil;local o,p=assert(load(n,'=frame','t',{}))()for q,r in ipairs(p)do term.setPaletteColor(2^(q-1),table.unpack(r))end;for s,t in ipairs(o)do term.setCursorPos(1,s)term.blit(table.unpack(t))end;while os.epoch'utc'<m+(l+1)/g.fps*1000 do sleep(1/g.fps)end end end,function()if not j or not j.playAudio then return end;while k>0 do os.pullEvent()end;local u=0;while u<g.length/g.fps do while not i[u]do os.pullEvent()end;local v=i[u]i[u]=nil;v={v:byte(1,-1)}for q=1,#v do v[q]=v[q]-128 end;u=u+1;if not j.playAudio(v)or _HOST:find('v2.6.4')then repeat local w,x=os.pullEvent('speaker_audio_empty')until x==peripheral.getName(j)end end end)for q=0,15 do term.setPaletteColor(2^q,term.nativePaletteColor(2^q))end;term.setBackgroundColor(colors.black)term.setTextColor(colors.white)term.setCursorPos(1,1)term.clear()";
 
 // BEGIN OPENCL-COMPATIBLE CODE
 
@@ -967,7 +970,8 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
         std::string text, fg, bg;
         for (int x = 0; x < width; x++) {
             uchar c = characters[y*width+x], cc = colors[y*width+x];
-            text += "\\" + std::to_string(c);
+            if (c >= 32 && c < 127 && c != '"') text += c;
+            else text += "\\" + std::to_string(c);
             fg += hexstr[cc & 0xf];
             bg += hexstr[cc >> 4];
         }
@@ -1051,11 +1055,80 @@ std::string makeLuaFile(const uchar * characters, const uchar * colors, const st
     return "local image, palette = " + makeTable(characters, colors, palette, width, height) + "\n\nterm.clear()\nfor i, v in ipairs(palette) do term.setPaletteColor(2^(i-1), table.unpack(v)) end\nfor y, r in ipairs(image) do\n    term.setCursorPos(1, y)\n    term.blit(table.unpack(r))\nend\nread()\nfor i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.setCursorPos(1, 1)\nterm.clear()\n";
 }
 
+class HTTPListener: public HTTPRequestHandler {
+public:
+    double *fps;
+    HTTPListener(double *f): fps(f) {}
+    void handleRequest(HTTPServerRequest &request, HTTPServerResponse &response) override {
+        std::string path = request.getURI();
+        if (path.empty() || path == "/") {
+            std::string file = "local a='" + request.getHost() + playLua;
+            response.setStatusAndReason(HTTPResponse::HTTP_OK);
+            response.setContentType("text/x-lua");
+            response.send().write(file.c_str(), file.size());
+        } else if (path == "/info") {
+            std::string file = "{\n    \"length\": " + std::to_string(frameStorage.size()) + ",\n    \"fps\": " + std::to_string(*fps) + "\n}";
+            response.setStatusAndReason(HTTPResponse::HTTP_OK);
+            response.setContentType("application/json");
+            response.send().write(file.c_str(), file.size());
+        } else if (path.substr(0, 7) == "/video/") {
+            int frame;
+            try {
+                frame = std::stoi(path.substr(7));
+            } catch (std::exception &e) {
+                response.setStatusAndReason(HTTPResponse::HTTP_BAD_REQUEST);
+                response.setContentType("text/plain");
+                response.send().write("Invalid path", 12);
+                return;
+            }
+            if (frame < 0 || frame >= frameStorage.size()) {
+                response.setStatusAndReason(HTTPResponse::HTTP_NOT_FOUND);
+                response.setContentType("text/plain");
+                response.send().write("404 Not Found", 13);
+                return;
+            }
+            response.setStatusAndReason(HTTPResponse::HTTP_OK);
+            response.setContentType("text/x-lua");
+            response.send().write(frameStorage[frame].c_str(), frameStorage[frame].size());
+        } else if (path.substr(0, 7) == "/audio/") {
+            int frame;
+            try {
+                frame = std::stoi(path.substr(7));
+            } catch (std::exception &e) {
+                response.setStatusAndReason(HTTPResponse::HTTP_BAD_REQUEST);
+                response.setContentType("text/plain");
+                response.send().write("Invalid path", 12);
+                return;
+            }
+            if (frame < 0 || frame > audioStorageSize / 48000) {
+                response.setStatusAndReason(HTTPResponse::HTTP_NOT_FOUND);
+                response.setContentType("text/plain");
+                response.send().write("404 Not Found", 13);
+                return;
+            }
+            response.setStatusAndReason(HTTPResponse::HTTP_OK);
+            response.setContentType("application/octet-stream");
+            response.send().write((char*)(audioStorage + frame * 48000), frame == audioStorageSize / 48000 ? audioStorageSize % 48000 : 48000);
+        } else {
+            response.setStatusAndReason(HTTPResponse::HTTP_NOT_FOUND);
+            response.setContentType("text/plain");
+            response.send().write("404 Not Found", 13);
+        }
+    }
+    class Factory: public HTTPRequestHandlerFactory {
+    public:
+        double *fps;
+        Factory(double *f): fps(f) {}
+        HTTPRequestHandler* createRequestHandler(const HTTPServerRequest&) override {
+            return new HTTPListener(fps);
+        }
+    };
+};
+
 class WebSocketServer: public HTTPRequestHandler {
 public:
-    HTTPServer *srv;
     double *fps;
-    WebSocketServer(HTTPServer *s, double *f): srv(s), fps(f) {}
+    WebSocketServer(double *f): fps(f) {}
     void handleRequest(HTTPServerRequest &request, HTTPServerResponse &response) override {
         try {
             WebSocket ws(request, response);
@@ -1093,11 +1166,10 @@ public:
     }
     class Factory: public HTTPRequestHandlerFactory {
     public:
-        HTTPServer *srv = NULL;
         double *fps;
         Factory(double *f): fps(f) {}
         HTTPRequestHandler* createRequestHandler(const HTTPServerRequest&) override {
-            return new WebSocketServer(srv, fps);
+            return new WebSocketServer(fps);
         }
     };
 };
@@ -1271,7 +1343,9 @@ int main(int argc, const char * argv[]) {
     HTTPServer * srv;
     double fps = 0;
     if (mode == 2) {
-
+        srv = new HTTPServer(new HTTPListener::Factory(&fps), port);
+        srv->start();
+        signal(SIGINT, sighandler);
     } else if (mode == 3) {
         srv = new HTTPServer(new WebSocketServer::Factory(&fps), port);
         srv->start();
