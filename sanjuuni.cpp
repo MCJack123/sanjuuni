@@ -24,6 +24,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
+#include <zlib.h>
 }
 //#include <CL/opencl.hpp>
 #include <Poco/Base64Encoder.h>
@@ -32,6 +33,7 @@ extern "C" {
 #include <Poco/Util/OptionSet.h>
 #include <Poco/Util/OptionException.h>
 #include <Poco/Util/IntValidator.h>
+#include <Poco/Util/RegExpValidator.h>
 #include <Poco/Util/HelpFormatter.h>
 #include <Poco/Net/NetException.h>
 #include <Poco/Net/HTTPRequest.h>
@@ -1053,6 +1055,79 @@ std::string makeRawImage(const uchar * screen, const uchar * colors, const std::
     }
 }
 
+std::string make32vid_5bit(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
+    std::string screen, col, pal;
+    uint64_t next5bit = 0;
+    uchar next5bit_pos = 0;
+    for (int i = 0; i < width * height; i++) {
+        next5bit = (next5bit << 5) | (characters[i] & 0x1F);
+        col += colors[i];
+        if (++next5bit_pos == 8) {
+            screen += (char)((next5bit >> 32) & 0xFF);
+            screen += (char)((next5bit >> 24) & 0xFF);
+            screen += (char)((next5bit >> 16) & 0xFF);
+            screen += (char)((next5bit >> 8) & 0xFF);
+            screen += (char)(next5bit & 0xFF);
+            next5bit = next5bit_pos = 0;
+        }
+    }
+    if (next5bit_pos) {
+        next5bit <<= (8 - next5bit_pos) * 5;
+        screen += (char)((next5bit >> 32) & 0xFF);
+        screen += (char)((next5bit >> 24) & 0xFF);
+        screen += (char)((next5bit >> 16) & 0xFF);
+        screen += (char)((next5bit >> 8) & 0xFF);
+        screen += (char)(next5bit & 0xFF);
+        next5bit = next5bit_pos = 0;
+    }
+    for (int i = 0; i < 16; i++) {
+        if (i < palette.size()) {
+            pal += palette[i][2];
+            pal += palette[i][1];
+            pal += palette[i][0];
+        } else pal += std::string((size_t)3, (char)0);
+    }
+    return screen + col + pal;
+}
+
+std::string make32vid_6bit(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
+    std::string screen, col, pal;
+    uchar lastColor = 0;
+    uint32_t next6bit = 0;
+    uchar next6bit_pos = 0;
+    for (int i = 0; i < width * height; i++) {
+        uchar tok = characters[i] & 0x1F;
+        uchar c = colors[i];
+        if (((c >> 4) | (c << 4)) == lastColor) {
+            c = lastColor;
+            tok |= 0x20;
+        }
+        lastColor = c;
+        col += c;
+        next6bit = (next6bit << 6) | tok;
+        if (++next6bit_pos == 4) {
+            screen += (char)((next6bit >> 16) & 0xFF);
+            screen += (char)((next6bit >> 8) & 0xFF);
+            screen += (char)(next6bit & 0xFF);
+            next6bit = next6bit_pos = 0;
+        }
+    }
+    if (next6bit_pos) {
+        next6bit <<= (4 - next6bit_pos) * 6;
+        screen += (char)((next6bit >> 16) & 0xFF);
+        screen += (char)((next6bit >> 8) & 0xFF);
+        screen += (char)(next6bit & 0xFF);
+    }
+    for (int i = 0; i < 16; i++) {
+        if (i < palette.size()) {
+            pal += palette[i][2];
+            pal += palette[i][1];
+            pal += palette[i][0];
+        } else pal += std::string((size_t)3, (char)0);
+    }
+    return screen + col + pal;
+}
+
 std::string makeLuaFile(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
     return "local image, palette = " + makeTable(characters, colors, palette, width, height) + "\n\nterm.clear()\nfor i, v in ipairs(palette) do term.setPaletteColor(2^(i-1), table.unpack(v)) end\nfor y, r in ipairs(image) do\n    term.setCursorPos(1, y)\n    term.blit(table.unpack(r))\nend\nread()\nfor i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.setCursorPos(1, 1)\nterm.clear()\n";
 }
@@ -1193,17 +1268,78 @@ public:
     virtual const char * name() const noexcept {return "Help";}
 };
 
+#define VID32_FLAG_VIDEO_COMPRESSION_NONE     0x0000
+#define VID32_FLAG_VIDEO_COMPRESSION_LZW      0x0001
+#define VID32_FLAG_VIDEO_COMPRESSION_DEFLATE  0x0002
+#define VID32_FLAG_AUDIO_COMPRESSION_NONE     0x0000
+#define VID32_FLAG_AUDIO_COMPRESSION_DFPWM    0x0004
+#define VID32_FLAG_VIDEO_5BIT_CODES           0x0010
+
+struct Vid32Header {
+    char magic[4];
+    uint16_t width;
+    uint16_t height;
+    uint8_t fps;
+    uint8_t nstreams;
+    uint16_t flags;
+};
+
+struct Vid32Chunk {
+    uint32_t size;
+    uint32_t nframes;
+    uint8_t type;
+    uint8_t data[];
+    enum class Type {
+        Video = 0,
+        Audio,
+        AudioLeft,
+        AudioRight,
+        AudioCh3,
+        AudioCh4,
+        AudioCh5,
+        AudioCh6,
+        Subtitle,
+        Subtitle2,
+        Subtitle3,
+        Subtitle4
+    };
+};
+
+struct Vid32SubtitleEvent {
+    uint32_t start;
+    uint32_t length;
+    uint16_t x;
+    uint16_t y;
+    uint8_t colors;
+    uint8_t flags;
+    uint16_t size;
+    char text[];
+};
+
+enum class OutputType {
+    Default,
+    Lua,
+    Raw,
+    Vid32,
+    HTTP,
+    WebSocket
+};
+
 int main(int argc, const char * argv[]) {
     OptionSet options;
     options.addOption(Option("input", "i", "Input image or video", true, "file", true));
     options.addOption(Option("output", "o", "Output file path", false, "path", true));
     options.addOption(Option("lua", "l", "Output a Lua script file (default for images; only does one frame)"));
     options.addOption(Option("raw", "r", "Output a rawmode-based image/video file (default for videos)"));
+    options.addOption(Option("32vid", "3", "Output a 32vid format binary video file with compression + audio"));
     options.addOption(Option("http", "s", "Serve an HTTP server that has each frame split up + a player program", false, "port", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("websocket", "w", "Serve a WebSocket that sends the image/video with audio", false, "port", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("default-palette", "p", "Use the default CC palette instead of generating an optimized one"));
     options.addOption(Option("threshold", "t", "Use thresholding instead of dithering"));
     options.addOption(Option("octree", "8", "Use octree for higher quality color conversion (slower)"));
+    options.addOption(Option("5bit", "5", "Use 5-bit codes in 32vid (internal testing)"));
+    options.addOption(Option("compression", "c", "Compression type for 32vid videos", false, "none|lzw|deflate", true).validator(new RegExpValidator("^(none|lzw|deflate)$")));
+    options.addOption(Option("compression-level", "L", "Compression level for 32vid videos when using DEFLATE", false, "1-9", true).validator(new IntValidator(1, 9)));
     options.addOption(Option("width", "w", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("height", "H", "Resize the image to the specified height", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("help", "h", "Show this help"));
@@ -1211,29 +1347,37 @@ int main(int argc, const char * argv[]) {
     argparse.setUnixStyle(true);
 
     std::string input, output;
-    bool useDefaultPalette = false, noDither = false, useOctree = false;
-    int mode = -1, port;
-    int width = -1, height = -1;
+    bool useDefaultPalette = false, noDither = false, useOctree = false, use5bit = false;
+    OutputType mode = OutputType::Default;
+    int compression = VID32_FLAG_VIDEO_COMPRESSION_DEFLATE;
+    int port = 80, width = -1, height = -1, zlibCompression = 5;
     try {
         for (int i = 1; i < argc; i++) {
             std::string option, arg;
             if (argparse.process(argv[i], option, arg)) {
                 if (option == "input") input = arg;
                 else if (option == "output") output = arg;
-                else if (option == "lua") mode = 0;
-                else if (option == "raw") mode = 1;
-                else if (option == "http") {mode = 2; port = std::stoi(arg);}
-                else if (option == "websocket") {mode = 3; port = std::stoi(arg);}
+                else if (option == "lua") mode = OutputType::Lua;
+                else if (option == "raw") mode = OutputType::Raw;
+                else if (option == "32vid") mode = OutputType::Vid32;
+                else if (option == "http") {mode = OutputType::HTTP; port = std::stoi(arg);}
+                else if (option == "websocket") {mode = OutputType::WebSocket; port = std::stoi(arg);}
                 else if (option == "default-palette") useDefaultPalette = true;
                 else if (option == "threshold") noDither = true;
                 else if (option == "octree") useOctree = true;
+                else if (option == "5bit") use5bit = true;
+                else if (option == "compression") {
+                    if (arg == "none") compression = VID32_FLAG_VIDEO_COMPRESSION_NONE;
+                    else if (arg == "lzw") compression = VID32_FLAG_VIDEO_COMPRESSION_LZW;
+                    else if (arg == "deflate") compression = VID32_FLAG_VIDEO_COMPRESSION_DEFLATE;
+                } else if (option == "compression-level") zlibCompression = std::stoi(arg);
                 else if (option == "width") width = std::stoi(arg);
                 else if (option == "height") height = std::stoi(arg);
                 else if (option == "help") throw HelpException();
             }
         }
         argparse.checkRequired();
-        if (!(mode == 2 || mode == 3) && output == "") throw MissingOptionException("Required option not specified: output");
+        if (!(mode == OutputType::HTTP || mode == OutputType::WebSocket) && output == "") throw MissingOptionException("Required option not specified: output");
     } catch (const OptionException &e) {
         if (e.className() != "HelpException") std::cerr << e.displayText() << "\n";
         HelpFormatter help(options);
@@ -1295,7 +1439,7 @@ int main(int argc, const char * argv[]) {
         avformat_close_input(&format_ctx);
         return error;
     }
-    if (mode == -1) mode = format_ctx->streams[video_stream]->nb_frames > 0 ? 1 : 0;
+    if (mode == OutputType::Default) mode = format_ctx->streams[video_stream]->nb_frames > 0 ? OutputType::Raw : OutputType::Lua;
     // Open the audio decoder if present
     if (audio_stream >= 0) {
         if (!(audio_codec = avcodec_find_decoder(format_ctx->streams[audio_stream]->codecpar->codec_id))) {
@@ -1344,12 +1488,13 @@ int main(int argc, const char * argv[]) {
     }
     std::ostream& outstream = (output == "-" || output == "") ? std::cout : outfile;
     HTTPServer * srv = NULL;
+    std::string videoStream;
     double fps = 0;
-    if (mode == 2) {
+    if (mode == OutputType::HTTP) {
         srv = new HTTPServer(new HTTPListener::Factory(&fps), port);
         srv->start();
         signal(SIGINT, sighandler);
-    } else if (mode == 3) {
+    } else if (mode == OutputType::WebSocket) {
         srv = new HTTPServer(new WebSocketServer::Factory(&fps), port);
         srv->start();
         signal(SIGINT, sighandler);
@@ -1366,7 +1511,7 @@ int main(int argc, const char * argv[]) {
         if (packet->stream_index == video_stream) {
             avcodec_send_packet(video_codec_ctx, packet);
             fps = (double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den;
-            if (nframe == 0 && mode == 1) outstream << "32Vid 1.1\n" << fps << "\n";
+            if (nframe == 0 && mode == OutputType::Raw) outstream << "32Vid 1.1\n" << fps << "\n";
             while ((error = avcodec_receive_frame(video_codec_ctx, frame)) == 0) {
                 std::cerr << "\rframe " << nframe++ << "/" << format_ctx->streams[video_stream]->nb_frames;
                 std::cerr.flush();
@@ -1401,13 +1546,17 @@ int main(int argc, const char * argv[]) {
                 uchar *characters, *colors;
                 makeCCImage(pimg, palette, &characters, &colors);
                 switch (mode) {
-                case 0: {
+                case OutputType::Lua: {
                     outstream << makeLuaFile(characters, colors, palette, pimg.width / 2, pimg.height / 3);
                     break;
-                } case 1: {
+                } case OutputType::Raw: {
                     outstream << makeRawImage(characters, colors, palette, pimg.width / 2, pimg.height / 3);
                     break;
-                } case 2: case 3: {
+                } case OutputType::Vid32: {
+                    if (use5bit) videoStream += make32vid_5bit(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    else videoStream += make32vid_6bit(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    break;
+                } case OutputType::HTTP: case OutputType::WebSocket: {
                     frameStorage.push_back("return " + makeTable(characters, colors, palette, pimg.width / 2, pimg.height / 3, true));
                     break;
                 }
@@ -1426,7 +1575,7 @@ int main(int argc, const char * argv[]) {
             if (error != AVERROR_EOF && error != AVERROR(EAGAIN)) {
                 std::cerr << "Failed to grab video frame: " << avErrorString(error) << "\n";
             }
-        } else if (packet->stream_index == audio_stream) {
+        } else if (packet->stream_index == audio_stream && mode != OutputType::Lua && mode != OutputType::Raw) {
             avcodec_send_packet(audio_codec_ctx, packet);
             while ((error = avcodec_receive_frame(audio_codec_ctx, frame)) == 0) {
                 if (!resample_ctx) resample_ctx = swr_alloc_set_opts(NULL, AV_CH_LAYOUT_MONO, AV_SAMPLE_FMT_U8, 48000, frame->channel_layout, (AVSampleFormat)frame->format, frame->sample_rate, 0, NULL);
@@ -1448,6 +1597,51 @@ int main(int argc, const char * argv[]) {
             }
         }
     }
+    if (mode == OutputType::Vid32) {
+        Vid32Chunk videoChunk, audioChunk;
+        Vid32Header header;
+        videoChunk.nframes = nframe;
+        videoChunk.type = (uint8_t)Vid32Chunk::Type::Video;
+        audioChunk.size = audioStorageSize;
+        audioChunk.nframes = audioStorageSize;
+        audioChunk.type = (uint8_t)Vid32Chunk::Type::Audio;
+        memcpy(header.magic, "32VD", 4);
+        header.width = width / 2;
+        header.height = height / 3;
+        header.fps = floor(fps + 0.5);
+        header.nstreams = 2;
+        header.flags = compression;
+        if (use5bit) header.flags |= VID32_FLAG_VIDEO_5BIT_CODES;
+
+        outfile.write((char*)&header, 12);
+        if (compression == VID32_FLAG_VIDEO_COMPRESSION_DEFLATE) {
+            unsigned long size = compressBound(videoStream.size());
+            uint8_t * buf = new uint8_t[size];
+            error = compress2(buf, &size, (const uint8_t*)videoStream.c_str(), videoStream.size(), compression);
+            if (error != Z_OK) {
+                std::cerr << "Could not compress video!\n";
+                delete[] buf;
+                goto cleanup;
+            }
+            videoChunk.size = size;
+            outfile.write((char*)&videoChunk, 9);
+            outfile.write((char*)buf + 2, size - 6);
+            delete[] buf;
+        } else if (compression == VID32_FLAG_VIDEO_COMPRESSION_LZW) {
+            // TODO
+            std::cerr << "LZW not implemented yet\n";
+            goto cleanup;
+        } else {
+            videoChunk.size = videoStream.size();
+            outfile.write((char*)&videoChunk, 9);
+            outfile.write(videoStream.c_str(), videoStream.size());
+        }
+        if (audioStorage) {
+            outfile.write((char*)&audioChunk, 9);
+            outfile.write((char*)audioStorage, audioStorageSize);
+        }
+    }
+cleanup:
     std::cerr << "\rframe " << nframe << "/" << format_ctx->streams[video_stream]->nb_frames << "\n";
     if (outfile.is_open()) outfile.close();
     if (resize_ctx) sws_freeContext(resize_ctx);
@@ -1457,7 +1651,7 @@ int main(int argc, const char * argv[]) {
     avcodec_free_context(&video_codec_ctx);
     if (audio_codec_ctx) avcodec_free_context(&audio_codec_ctx);
     avformat_close_input(&format_ctx);
-    if (mode == 2 || mode == 3) {
+    if (srv) {
         std::cout << "Serving on port " << port << "\n";
         std::unique_lock<std::mutex> lock(exitLock);
         exitNotify.wait(lock);

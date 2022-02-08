@@ -42,7 +42,7 @@ end, function()
         audio = {audio:byte(1, -1)}
         for i = 1, #audio do audio[i] = audio[i] - 128 end
         pos = pos + 1
-        if not speaker.playAudio(audio) or _HOST:find('v2.6.4') then repeat local ev, sp = os.pullEvent('speaker_audio_empty') until sp == peripheral.getName(speaker) end
+        if not speaker.playAudio(audio) then repeat local ev, sp = os.pullEvent('speaker_audio_empty') until sp == peripheral.getName(speaker) end
     end
 end)
 for i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end

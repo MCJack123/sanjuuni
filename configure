@@ -4009,6 +4009,18 @@ else $as_nop
 fi
 
 done
+       for ac_header in zlib.h
+do :
+  ac_fn_cxx_check_header_compile "$LINENO" "zlib.h" "ac_cv_header_zlib_h" "$ac_includes_default"
+if test "x$ac_cv_header_zlib_h" = xyes
+then :
+  printf "%s\n" "#define HAVE_ZLIB_H 1" >>confdefs.h
+
+else $as_nop
+  as_fn_error $? "Could not find zlib headers." "$LINENO" 5
+fi
+
+done
        for ac_header in Poco/Base64Encoder.h
 do :
   ac_fn_cxx_check_header_compile "$LINENO" "Poco/Base64Encoder.h" "ac_cv_header_Poco_Base64Encoder_h" "$ac_includes_default"
@@ -4404,6 +4416,66 @@ then :
 
 else $as_nop
   as_fn_error $? "Could not find libswresample library." "$LINENO" 5
+fi
+
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for library containing compress2" >&5
+printf %s "checking for library containing compress2... " >&6; }
+if test ${ac_cv_search_compress2+y}
+then :
+  printf %s "(cached) " >&6
+else $as_nop
+  ac_func_search_save_LIBS=$LIBS
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+namespace conftest {
+  extern "C" int compress2 ();
+}
+int
+main (void)
+{
+return conftest::compress2 ();
+  ;
+  return 0;
+}
+_ACEOF
+for ac_lib in '' z
+do
+  if test -z "$ac_lib"; then
+    ac_res="none required"
+  else
+    ac_res=-l$ac_lib
+    LIBS="-l$ac_lib  $ac_func_search_save_LIBS"
+  fi
+  if ac_fn_cxx_try_link "$LINENO"
+then :
+  ac_cv_search_compress2=$ac_res
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext
+  if test ${ac_cv_search_compress2+y}
+then :
+  break
+fi
+done
+if test ${ac_cv_search_compress2+y}
+then :
+
+else $as_nop
+  ac_cv_search_compress2=no
+fi
+rm conftest.$ac_ext
+LIBS=$ac_func_search_save_LIBS
+fi
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_search_compress2" >&5
+printf "%s\n" "$ac_cv_search_compress2" >&6; }
+ac_res=$ac_cv_search_compress2
+if test "$ac_res" != no
+then :
+  test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
+
+else $as_nop
+  as_fn_error $? "Could not find zlib library." "$LINENO" 5
 fi
 
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for Poco::ASCIIEncoding in -lPocoFoundation" >&5
