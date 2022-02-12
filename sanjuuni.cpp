@@ -54,6 +54,7 @@ extern "C" {
 #include <array>
 #include <queue>
 #include <condition_variable>
+#include <unordered_map>
 #include <csignal>
 #ifdef USE_SDL
 #include <SDL2/SDL.h>
@@ -841,17 +842,37 @@ std::vector<Vec3b> reducePalette(const Mat& image, int numColors, octree_tree * 
         std::vector<Vec3b> uniq(pal);
         uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
         if (numColors >= uniq.size()) return uniq;
-        return medianCut(pal, numColors, -1);
+        pal = medianCut(pal, numColors, -1);
+        // Move the darkest color to 15, and the lightest to 0
+        // This fixes some background issues & makes subtitles a bit simpler
+        std::vector<Vec3b>::iterator darkest = pal.begin(), lightest = pal.begin();
+        for (auto it = pal.begin(); it != pal.end(); it++) {
+            if ((int)(*it)[0] + (int)(*it)[1] + (int)(*it)[2] < (int)(*darkest)[0] + (int)(*darkest)[1] + (int)(*darkest)[2]) darkest = it;
+            if ((int)(*it)[0] + (int)(*it)[1] + (int)(*it)[2] > (int)(*lightest)[0] + (int)(*lightest)[1] + (int)(*lightest)[2]) lightest = it;
+        }
+        Vec3b d = *darkest, l = *lightest;
+        if (darkest == lightest)  pal.erase(darkest);
+        else if (darkest > lightest) {
+            pal.erase(darkest);
+            pal.erase(lightest);
+        } else {
+            pal.erase(lightest);
+            pal.erase(darkest);
+        }
+        pal.insert(pal.begin(), l);
+        pal.push_back(d);
+        return pal;
     }
 }
 
-static Vec3b nearestColor(const std::vector<Vec3b>& palette, const Vec3d& color) {
+static Vec3b nearestColor(const std::vector<Vec3b>& palette, const Vec3d& color, int* _n = NULL) {
     double n, dist = 1e100;
     for (int i = 0; i < palette.size(); i++) {
         Vec3d v = palette[i];
         double d = sqrt((v[0] - color[0])*(v[0] - color[0]) + (v[1] - color[1])*(v[1] - color[1]) + (v[2] - color[2])*(v[2] - color[2]));
         if (d < dist) {n = i; dist = d;}
     }
+    if (_n) *_n = n;
     return palette[n];
 }
 
@@ -974,7 +995,7 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
         std::string text, fg, bg;
         for (int x = 0; x < width; x++) {
             uchar c = characters[y*width+x], cc = colors[y*width+x];
-            if (c >= 32 && c < 127 && c != '"') text += c;
+            if (c >= 32 && c < 127 && c != '"' && c != '\\') text += c;
             else text += "\\" + std::to_string(c);
             fg += hexstr[cc & 0xf];
             bg += hexstr[cc >> 4];
@@ -1316,6 +1337,17 @@ struct Vid32SubtitleEvent {
     char text[];
 };
 
+struct ASSSubtitleEvent {
+    unsigned width;
+    unsigned height;
+    uint8_t alignment;
+    int marginLeft;
+    int marginRight;
+    int marginVertical;
+    Vec3b color;
+    std::string text;
+};
+
 enum class OutputType {
     Default,
     Lua,
@@ -1325,9 +1357,129 @@ enum class OutputType {
     WebSocket
 };
 
+static double parseTime(const std::string& str) {
+    return (str[0] - '0') * 3600 + (str[2] - '0') * 600 + (str[3] - '0') * 60 + (str[5] - '0') * 10 + (str[6] - '0') * 1 + (str[8] - '0') * 0.1 + (str[9] - '0') * 0.01;
+}
+
+static Vec3b parseColor(const std::string& str) {
+    uint32_t color;
+    if (str.substr(0, 2) == "&H") color = std::stoul(str.substr(2), NULL, 16);
+    else color = std::stoul(str);
+    return {color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF};
+}
+
+// Very basic parser - no error checking
+std::unordered_multimap<int, ASSSubtitleEvent> parseASSSubtitles(const std::string& path, double framerate) {
+    std::unordered_multimap<int, ASSSubtitleEvent> retval;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> styles;
+    std::vector<std::string> format;
+    uint8_t wrapStyle = 0;
+    unsigned width = 0, height = 0;
+    double speed = 1.0;
+    bool isASS = false;
+    std::ifstream in(path);
+    if (!in.is_open()) return retval;
+    while (!in.eof()) {
+        std::string line;
+        std::getline(in, line);
+        if (line[0] == ';' || line.empty() || std::all_of(line.begin(), line.end(), isspace)) continue;
+        size_t colon = line.find(":");
+        if (colon == std::string::npos) continue;
+        std::string type = line.substr(0, colon), data = line.substr(colon + 1);
+        int space;
+        for (space = 0; isspace(data[space]); space++);
+        if (space) data = data.substr(space);
+        for (space = data.size() - 1; isspace(data[space]); space--);
+        if (space < data.size() - 1) data = data.substr(0, space + 1);
+        if (type == "ScriptType") isASS = data == "v4.00+" || data == "V4.00+";
+        else if (type == "PlayResX") width = std::stoul(data);
+        else if (type == "PlayResY") height = std::stoul(data);
+        else if (type == "WrapStyle") wrapStyle = data[0] - '0';
+        else if (type == "Timer") speed = std::stod(data) / 100.0;
+        else if (type == "Format") {
+            format.clear();
+            for (size_t pos = 0; pos != std::string::npos; pos = data.find(',', pos))
+                {if (pos) pos++; format.push_back(data.substr(pos, data.find(',', pos) - pos));}
+        } else if (type == "Style") {
+            std::unordered_map<std::string, std::string> style;
+            for (size_t i = 0, pos = 0; i < format.size(); i++, pos = data.find(',', pos) + 1)
+                style[format[i]] = data.substr(pos, data.find(',', pos) - pos);
+            styles[style["Name"]] = style;
+        } else if (type == "Dialogue") {
+            std::unordered_map<std::string, std::string> params;
+            for (size_t i = 0, pos = 0; i < format.size(); i++, pos = data.find(',', pos) + 1)
+                params[format[i]] = data.substr(pos, i == format.size() - 1 ? SIZE_MAX : data.find(',', pos) - pos);
+            int start = parseTime(params["Start"]) * framerate, end = parseTime(params["End"]) * framerate;
+            std::unordered_map<std::string, std::string>& style = styles.find(params["Style"]) == styles.end() ? styles["Default"] : styles[params["Style"]];
+            for (int i = start; i < end; i++) {
+                ASSSubtitleEvent event;
+                event.width = width;
+                event.height = height;
+                event.alignment = std::stoi(style["Alignment"]);
+                if (!isASS) {
+                    switch (event.alignment) {
+                        case 9: case 10: case 11: event.alignment--;
+                        case 5: case 6: case 7: event.alignment--;
+                    }
+                }
+                if (!event.alignment) event.alignment = 2;
+                event.marginLeft = std::stoi(params["MarginL"]) == 0 ? std::stoi(style["MarginL"]) : std::stoi(params["MarginL"]);
+                event.marginRight = std::stoi(params["MarginR"]) == 0 ? std::stoi(style["MarginR"]) : std::stoi(params["MarginR"]);
+                event.marginVertical = std::stoi(params["MarginV"]) == 0 ? std::stoi(style["MarginV"]) : std::stoi(params["MarginV"]);
+                event.color = parseColor(style["PrimaryColour"]);
+                event.text = params["Text"];
+                retval.insert(std::make_pair(i, event));
+            }
+        }
+    }
+    in.close();
+    return retval;
+}
+
+void renderSubtitles(const std::unordered_multimap<int, ASSSubtitleEvent>& subtitles, int nframe, uchar * characters, uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
+    auto range = subtitles.equal_range(nframe);
+    for (auto it = range.first; it != range.second; it++) {
+        double scaleX = (double)it->second.width / (double)width, scaleY = (double)it->second.height / (double)height;
+        std::vector<std::string> lines;
+        std::string cur;
+        int color = 0;
+        nearestColor(palette, it->second.color, &color);
+        for (int i = 0; i < it->second.text.size(); i++) {
+            // TODO: add effects
+            if (it->second.text[i] == '\\' && (it->second.text[i+1] == 'n' || it->second.text[i+1] == 'N')) {
+                lines.push_back(cur);
+                cur = "";
+                i++;
+            } else if (it->second.text[i] == '{') i = it->second.text.find('}', i);
+            else cur += it->second.text[i];
+        }
+        lines.push_back(cur);
+        for (int i = 0; i < lines.size(); i++) {
+            int startX = 0, startY = 0;
+            switch (it->second.alignment) {
+                case 1: startX = it->second.marginLeft / scaleX; startY = height - ((double)it->second.marginVertical / scaleY) - (lines.size()-i-1)*3 - 1; break;
+                case 2: startX = width / 2 - lines[i].size(); startY = height - ((double)it->second.marginVertical / scaleY) - (lines.size()-i-1)*3 - 1; break;
+                case 3: startX = width - ((double)it->second.marginRight / scaleX) - lines[i].size() - 1; startY = height - ((double)it->second.marginVertical / scaleY) - (lines.size()-i-1)*3 - 1; break;
+                case 4: startX = it->second.marginLeft / scaleX; startY = it->second.marginVertical / scaleY + i*3; break;
+                case 5: startX = width / 2 - lines[i].size(); startY = it->second.marginVertical / scaleY + i*3; break;
+                case 6: startX = width - ((double)it->second.marginRight / scaleX) - lines[i].size() - 1; startY = it->second.marginVertical / scaleY + i*3; break;
+                case 7: startX = it->second.marginLeft / scaleX; startY = (height - lines.size()) / 2 + i*3; break;
+                case 8: startX = width / 2 - lines[i].size(); startY = (height - lines.size()) / 2 + i*3; break;
+                case 9: startX = width - ((double)it->second.marginRight / scaleX) - lines[i].size() - 1; startY = (height - lines.size()) / 2 + i*3; break;
+            }
+            int start = (startY / 3) * (width / 2) + (startX / 2);
+            for (int x = 0; x < lines[i].size(); x++) {
+                characters[start+x] = lines[i][x];
+                colors[start+x] = 0xF0 | color;
+            }
+        }
+    }
+}
+
 int main(int argc, const char * argv[]) {
     OptionSet options;
     options.addOption(Option("input", "i", "Input image or video", true, "file", true));
+    options.addOption(Option("subtitle", "S", "ASS-formatted subtitle file to add to the video", false, "file", true));
     options.addOption(Option("output", "o", "Output file path", false, "path", true));
     options.addOption(Option("lua", "l", "Output a Lua script file (default for images; only does one frame)"));
     options.addOption(Option("raw", "r", "Output a rawmode-based image/video file (default for videos)"));
@@ -1346,7 +1498,7 @@ int main(int argc, const char * argv[]) {
     OptionProcessor argparse(options);
     argparse.setUnixStyle(true);
 
-    std::string input, output;
+    std::string input, output, subtitle;
     bool useDefaultPalette = false, noDither = false, useOctree = false, use5bit = false;
     OutputType mode = OutputType::Default;
     int compression = VID32_FLAG_VIDEO_COMPRESSION_DEFLATE;
@@ -1356,6 +1508,7 @@ int main(int argc, const char * argv[]) {
             std::string option, arg;
             if (argparse.process(argv[i], option, arg)) {
                 if (option == "input") input = arg;
+                else if (option == "subtitle") subtitle = arg;
                 else if (option == "output") output = arg;
                 else if (option == "lua") mode = OutputType::Lua;
                 else if (option == "raw") mode = OutputType::Raw;
@@ -1396,6 +1549,7 @@ int main(int argc, const char * argv[]) {
     SwsContext * resize_ctx = NULL;
     SwrContext * resample_ctx = NULL;
     int error, video_stream = -1, audio_stream = -1;
+    std::unordered_multimap<int, ASSSubtitleEvent> subtitles;
     // Open video file
     if ((error = avformat_open_input(&format_ctx, input.c_str(), NULL, NULL)) < 0) {
         std::cerr << "Could not open input file: " << avErrorString(error) << "\n";
@@ -1511,6 +1665,7 @@ int main(int argc, const char * argv[]) {
         if (packet->stream_index == video_stream) {
             avcodec_send_packet(video_codec_ctx, packet);
             fps = (double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den;
+            if (nframe == 0 && !subtitle.empty()) subtitles = parseASSSubtitles(subtitle, fps);
             if (nframe == 0 && mode == OutputType::Raw) outstream << "32Vid 1.1\n" << fps << "\n";
             while ((error = avcodec_receive_frame(video_codec_ctx, frame)) == 0) {
                 std::cerr << "\rframe " << nframe++ << "/" << format_ctx->streams[video_stream]->nb_frames;
@@ -1545,6 +1700,7 @@ int main(int argc, const char * argv[]) {
                 Mat1b pimg = rgbToPaletteImage(out, palette);
                 uchar *characters, *colors;
                 makeCCImage(pimg, palette, &characters, &colors);
+                if (!subtitle.empty() && mode != OutputType::Vid32) renderSubtitles(subtitles, nframe, characters, colors, palette, pimg.width, pimg.height);
                 switch (mode) {
                 case OutputType::Lua: {
                     outstream << makeLuaFile(characters, colors, palette, pimg.width / 2, pimg.height / 3);
