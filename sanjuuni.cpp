@@ -1545,7 +1545,7 @@ int main(int argc, const char * argv[]) {
 
     AVFormatContext * format_ctx = NULL;
     AVCodecContext * video_codec_ctx = NULL, * audio_codec_ctx = NULL;
-    AVCodec * video_codec = NULL, * audio_codec = NULL;
+    const AVCodec * video_codec = NULL, * audio_codec = NULL;
     SwsContext * resize_ctx = NULL;
     SwrContext * resample_ctx = NULL;
     int error, video_stream = -1, audio_stream = -1;
