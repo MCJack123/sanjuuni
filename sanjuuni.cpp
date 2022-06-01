@@ -989,7 +989,7 @@ void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** 
     delete[] colors;
 }
 
-std::string makeTable(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height, bool compact = false) {
+std::string makeTable(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height, bool compact = false, bool embedPalette = false) {
     std::string retval = compact ? "{" : "{\n";
     for (int y = 0; y < height; y++) {
         std::string text, fg, bg;
@@ -1003,12 +1003,12 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
         if (compact) retval += "{\"" + text + "\",\"" + fg + "\",\"" + bg + "\"},";
         else retval += "    {\n        \"" + text + "\",\n        \"" + fg + "\",\n        \"" + bg + "\"\n    },\n";
     }
-    retval += compact ? "},{" : "}, {\n";
+    retval += embedPalette ? "    palette = {" : (compact ? "},{" : "}, {\n");
     for (const Vec3b& c : palette) {
         if (compact) retval += "{" + std::to_string(c[2] / 255.0) + "," + std::to_string(c[1] / 255.0) + "," + std::to_string(c[0] / 255.0) + "},";
         else retval += "    {" + std::to_string(c[2] / 255.0) + ", " + std::to_string(c[1] / 255.0) + ", " + std::to_string(c[0] / 255.0) + "},\n";
     }
-    return retval + "}";
+    return retval + (embedPalette ? "    }\n}" : "}");
 }
 
 std::string makeRawImage(const uchar * screen, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
@@ -1354,7 +1354,8 @@ enum class OutputType {
     Raw,
     Vid32,
     HTTP,
-    WebSocket
+    WebSocket,
+    BlitImage
 };
 
 static double parseTime(const std::string& str) {
@@ -1486,6 +1487,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("32vid", "3", "Output a 32vid format binary video file with compression + audio"));
     options.addOption(Option("http", "s", "Serve an HTTP server that has each frame split up + a player program", false, "port", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("websocket", "w", "Serve a WebSocket that sends the image/video with audio", false, "port", true).validator(new IntValidator(1, 65535)));
+    options.addOption(Option("blit-image", "b", "Output a blit image (BIMG) format image/animation file"));
     options.addOption(Option("default-palette", "p", "Use the default CC palette instead of generating an optimized one"));
     options.addOption(Option("threshold", "t", "Use thresholding instead of dithering"));
     options.addOption(Option("octree", "8", "Use octree for higher quality color conversion (slower)"));
@@ -1515,6 +1517,7 @@ int main(int argc, const char * argv[]) {
                 else if (option == "32vid") mode = OutputType::Vid32;
                 else if (option == "http") {mode = OutputType::HTTP; port = std::stoi(arg);}
                 else if (option == "websocket") {mode = OutputType::WebSocket; port = std::stoi(arg);}
+                else if (option == "blit-image") mode = OutputType::BlitImage;
                 else if (option == "default-palette") useDefaultPalette = true;
                 else if (option == "threshold") noDither = true;
                 else if (option == "octree") useOctree = true;
@@ -1665,8 +1668,11 @@ int main(int argc, const char * argv[]) {
         if (packet->stream_index == video_stream) {
             avcodec_send_packet(video_codec_ctx, packet);
             fps = (double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den;
-            if (nframe == 0 && !subtitle.empty()) subtitles = parseASSSubtitles(subtitle, fps);
-            if (nframe == 0 && mode == OutputType::Raw) outstream << "32Vid 1.1\n" << fps << "\n";
+            if (nframe == 0) {
+                if (!subtitle.empty()) subtitles = parseASSSubtitles(subtitle, fps);
+                if (mode == OutputType::Raw) outstream << "32Vid 1.1\n" << fps << "\n";
+                else if (mode == OutputType::BlitImage) outstream << "{\n";
+            }
             while ((error = avcodec_receive_frame(video_codec_ctx, frame)) == 0) {
                 std::cerr << "\rframe " << nframe++ << "/" << format_ctx->streams[video_stream]->nb_frames;
                 std::cerr.flush();
@@ -1707,6 +1713,9 @@ int main(int argc, const char * argv[]) {
                     break;
                 } case OutputType::Raw: {
                     outstream << makeRawImage(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    break;
+                } case OutputType::BlitImage: {
+                    outstream << makeTable(characters, colors, palette, pimg.width / 2, pimg.height / 3, false, true) << ",\n";
                     break;
                 } case OutputType::Vid32: {
                     if (use5bit) videoStream += make32vid_5bit(characters, colors, palette, pimg.width / 2, pimg.height / 3);
@@ -1796,6 +1805,12 @@ int main(int argc, const char * argv[]) {
             outfile.write((char*)&audioChunk, 9);
             outfile.write((char*)audioStorage, audioStorageSize);
         }
+    } else if (mode == OutputType::BlitImage) {
+        char timestr[26];
+        time_t now = time(0);
+        struct tm * time = gmtime(&now);
+        strftime(timestr, 26, "%FT%T%z", time);
+        outfile << "    creator = 'sanjuuni',\n    version = '1.0',\n    secondsPerFrame = " << (1.0 / fps) << ",\n    animation = " << (nframe > 1 ? "true" : "false") << ",\n    date = '" << timestr << "',\n    title = '" << input << "'\n}\n";
     }
 cleanup:
     std::cerr << "\rframe " << nframe << "/" << format_ctx->streams[video_stream]->nb_frames << "\n";
