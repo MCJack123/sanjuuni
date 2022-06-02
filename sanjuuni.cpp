@@ -171,9 +171,10 @@ template<typename T> T max(T a, T b) {return a > b ? a : b;}
 bool isOpenCLInitialized = false;
 static std::vector<std::string> frameStorage;
 static uint8_t * audioStorage = NULL;
-static unsigned audioStorageSize = 0;
-static std::mutex exitLock;
-static std::condition_variable exitNotify;
+static long audioStorageSize = 0, totalFrames = 0;
+static std::mutex exitLock, streamedLock;
+static std::condition_variable exitNotify, streamedNotify;
+static bool streamed = false;
 static const char * hexstr = "0123456789abcdef";
 static const std::vector<Vec3b> defaultPalette = {
     {0xf0, 0xf0, 0xf0},
@@ -990,7 +991,8 @@ void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** 
 }
 
 std::string makeTable(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height, bool compact = false, bool embedPalette = false) {
-    std::string retval = compact ? "{" : "{\n";
+    std::stringstream retval;
+    retval << (compact ? "{" : "{\n");
     for (int y = 0; y < height; y++) {
         std::string text, fg, bg;
         for (int x = 0; x < width; x++) {
@@ -1000,15 +1002,16 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
             fg += hexstr[cc & 0xf];
             bg += hexstr[cc >> 4];
         }
-        if (compact) retval += "{\"" + text + "\",\"" + fg + "\",\"" + bg + "\"},";
-        else retval += "    {\n        \"" + text + "\",\n        \"" + fg + "\",\n        \"" + bg + "\"\n    },\n";
+        if (compact) retval << "{\"" << text << "\",\"" << fg << "\",\"" << bg << "\"},";
+        else retval << "    {\n        \"" << text << "\",\n        \"" << fg << "\",\n        \"" << bg << "\"\n    },\n";
     }
-    retval += embedPalette ? "    palette = {\n" : (compact ? "},{" : "}, {\n");
+    retval << embedPalette ? "    palette = {\n" : (compact ? "},{" : "}, {\n");
     for (const Vec3b& c : palette) {
-        if (compact) retval += "{" + std::to_string(c[2] / 255.0) + "," + std::to_string(c[1] / 255.0) + "," + std::to_string(c[0] / 255.0) + "},";
-        else retval += "    {" + std::to_string(c[2] / 255.0) + ", " + std::to_string(c[1] / 255.0) + ", " + std::to_string(c[0] / 255.0) + "},\n";
+        if (compact) retval << "{" << std::to_string(c[2] / 255.0) << "," << std::to_string(c[1] / 255.0) << "," << std::to_string(c[0] / 255.0) << "},";
+        else retval << "    {" << std::to_string(c[2] / 255.0) << ", " << std::to_string(c[1] / 255.0) << ", " << std::to_string(c[0] / 255.0) << "},\n";
     }
-    return retval + (embedPalette ? "    }\n}" : "}");
+    retval << (embedPalette ? "    }\n}" : "}");
+    return retval.str();
 }
 
 std::string makeRawImage(const uchar * screen, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
@@ -1238,16 +1241,31 @@ public:
                 catch (Poco::TimeoutException &e) {continue;}
                 if (n > 0) {
                     //std::cout << std::string(buf, n) << "\n";
+                    if (streamed) {
+                        std::unique_lock<std::mutex> lock(streamedLock);
+                        streamedNotify.notify_all();
+                        streamedNotify.wait(lock);
+                    }
                     if (buf[0] == 'v') {
                         int frame = std::stoi(std::string(buf + 1, n - 1));
                         if (frame >= frameStorage.size() || frame < 0) ws.sendFrame("!", 1, WebSocket::FRAME_TEXT);
                         else ws.sendFrame(frameStorage[frame].c_str(), frameStorage[frame].size(), WebSocket::FRAME_BINARY);
+                        if (streamed) frameStorage[frame] = "";
                     } else if (buf[0] == 'a') {
                         int offset = std::stoi(std::string(buf + 1, n - 1));
-                        if (offset >= audioStorageSize || offset < 0) ws.sendFrame("!", 1, WebSocket::FRAME_TEXT);
+                        if (streamed) {
+                            if (audioStorageSize < 48000) {
+                                audioStorage = (uint8_t*)realloc(audioStorage, 48000);
+                                bzero(audioStorage + max(audioStorageSize, 0L), 48000 - max(audioStorageSize, 0L));
+                            }
+                            if (audioStorageSize > -48000) ws.sendFrame(audioStorageSize < 0 ? audioStorage - audioStorageSize : audioStorage, 48000, WebSocket::FRAME_BINARY);
+                            if (audioStorageSize > 48000) memmove(audioStorage, audioStorage + 48000, audioStorageSize - 48000);
+                            audioStorageSize -= 48000;
+                        }
+                        else if (offset >= audioStorageSize || offset < 0) ws.sendFrame("!", 1, WebSocket::FRAME_TEXT);
                         else ws.sendFrame(audioStorage + offset, offset + 48000 > audioStorageSize ? audioStorageSize - offset : 48000, WebSocket::FRAME_BINARY);
                     } else if (buf[0] == 'n') {
-                        std::string data = std::to_string(frameStorage.size());
+                        std::string data = std::to_string(streamed ? totalFrames : frameStorage.size());
                         ws.sendFrame(data.c_str(), data.size(), WebSocket::FRAME_TEXT);
                     } else if (buf[0] == 'f') {
                         std::string data = std::to_string(*fps);
@@ -1488,13 +1506,14 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("32vid", "3", "Output a 32vid format binary video file with compression + audio"));
     options.addOption(Option("http", "s", "Serve an HTTP server that has each frame split up + a player program", false, "port", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("websocket", "w", "Serve a WebSocket that sends the image/video with audio", false, "port", true).validator(new IntValidator(1, 65535)));
+    options.addOption(Option("streamed", "S", "For servers, encode data on-the-fly instead of doing it ahead of time (saves memory at the cost of speed and only one client)"));
     options.addOption(Option("default-palette", "p", "Use the default CC palette instead of generating an optimized one"));
     options.addOption(Option("threshold", "t", "Use thresholding instead of dithering"));
     options.addOption(Option("octree", "8", "Use octree for higher quality color conversion (slower)"));
     options.addOption(Option("5bit", "5", "Use 5-bit codes in 32vid (internal testing)"));
     options.addOption(Option("compression", "c", "Compression type for 32vid videos", false, "none|lzw|deflate", true).validator(new RegExpValidator("^(none|lzw|deflate)$")));
     options.addOption(Option("compression-level", "L", "Compression level for 32vid videos when using DEFLATE", false, "1-9", true).validator(new IntValidator(1, 9)));
-    options.addOption(Option("width", "w", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
+    options.addOption(Option("width", "W", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("height", "H", "Resize the image to the specified height", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("help", "h", "Show this help"));
     OptionProcessor argparse(options);
@@ -1518,6 +1537,7 @@ int main(int argc, const char * argv[]) {
                 else if (option == "http") {mode = OutputType::HTTP; port = std::stoi(arg);}
                 else if (option == "websocket") {mode = OutputType::WebSocket; port = std::stoi(arg);}
                 else if (option == "blit-image") mode = OutputType::BlitImage;
+                else if (option == "streamed") streamed = true;
                 else if (option == "default-palette") useDefaultPalette = true;
                 else if (option == "threshold") noDither = true;
                 else if (option == "octree") useOctree = true;
@@ -1538,7 +1558,7 @@ int main(int argc, const char * argv[]) {
         if (e.className() != "HelpException") std::cerr << e.displayText() << "\n";
         HelpFormatter help(options);
         help.setUnixStyle(true);
-        help.setUsage("[options] -i <input> [-o <output>]");
+        help.setUsage("[options] -i <input> [-o <output> | -s <port> | -w <port>]");
         help.setCommand(argv[0]);
         help.setHeader("sanjuuni converts images and videos into a format that can be displayed in ComputerCraft.");
         help.setFooter("sanjuuni is licensed under the GPL license. Get the source at https://github.com/MCJack123/sanjuuni.");
@@ -1664,6 +1684,7 @@ int main(int argc, const char * argv[]) {
 #endif
 
     int nframe = 0;
+    totalFrames = format_ctx->streams[video_stream]->nb_frames;
     while (av_read_frame(format_ctx, packet) >= 0) {
         if (packet->stream_index == video_stream) {
             avcodec_send_packet(video_codec_ctx, packet);
@@ -1710,12 +1731,15 @@ int main(int argc, const char * argv[]) {
                 switch (mode) {
                 case OutputType::Lua: {
                     outstream << makeLuaFile(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    outstream.flush();
                     break;
                 } case OutputType::Raw: {
                     outstream << makeRawImage(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    outstream.flush();
                     break;
                 } case OutputType::BlitImage: {
                     outstream << makeTable(characters, colors, palette, pimg.width / 2, pimg.height / 3, false, true) << ",\n";
+                    outstream.flush();
                     break;
                 } case OutputType::Vid32: {
                     if (use5bit) videoStream += make32vid_5bit(characters, colors, palette, pimg.width / 2, pimg.height / 3);
@@ -1736,6 +1760,11 @@ int main(int argc, const char * argv[]) {
 #endif
                 delete[] characters;
                 delete[] colors;
+                if (streamed) {
+                    std::unique_lock<std::mutex> lock(streamedLock);
+                    streamedNotify.notify_all();
+                    streamedNotify.wait(lock);
+                }
             }
             if (error != AVERROR_EOF && error != AVERROR(EAGAIN)) {
                 std::cerr << "Failed to grab video frame: " << avErrorString(error) << "\n";
@@ -1752,8 +1781,11 @@ int main(int argc, const char * argv[]) {
                     std::cerr << "Failed to convert audio: " << avErrorString(error) << "\n";
                     continue;
                 }
-                audioStorage = (uint8_t*)realloc(audioStorage, audioStorageSize + newframe->nb_samples);
-                memcpy(audioStorage + audioStorageSize, newframe->data[0], newframe->nb_samples);
+                if (audioStorageSize + newframe->nb_samples > 0) {
+                    unsigned offset = audioStorageSize < 0 ? -audioStorageSize : 0;
+                    audioStorage = (uint8_t*)realloc(audioStorage, audioStorageSize + newframe->nb_samples);
+                    memcpy(audioStorage + audioStorageSize + offset, newframe->data[0] + offset, newframe->nb_samples - offset);
+                }
                 audioStorageSize += newframe->nb_samples;
                 av_frame_free(&newframe);
             }
@@ -1761,6 +1793,7 @@ int main(int argc, const char * argv[]) {
                 std::cerr << "Failed to grab audio frame: " << avErrorString(error) << "\n";
             }
         }
+        av_packet_unref(packet);
     }
     if (mode == OutputType::Vid32) {
         Vid32Chunk videoChunk, audioChunk;
@@ -1823,9 +1856,11 @@ cleanup:
     if (audio_codec_ctx) avcodec_free_context(&audio_codec_ctx);
     avformat_close_input(&format_ctx);
     if (srv) {
-        std::cout << "Serving on port " << port << "\n";
-        std::unique_lock<std::mutex> lock(exitLock);
-        exitNotify.wait(lock);
+        if (!streamed) {
+            std::cout << "Serving on port " << port << "\n";
+            std::unique_lock<std::mutex> lock(exitLock);
+            exitNotify.wait(lock);
+        }
         srv->stop();
         delete srv;
     }
