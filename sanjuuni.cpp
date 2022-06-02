@@ -1003,7 +1003,7 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
         if (compact) retval += "{\"" + text + "\",\"" + fg + "\",\"" + bg + "\"},";
         else retval += "    {\n        \"" + text + "\",\n        \"" + fg + "\",\n        \"" + bg + "\"\n    },\n";
     }
-    retval += embedPalette ? "    palette = {" : (compact ? "},{" : "}, {\n");
+    retval += embedPalette ? "    palette = {\n" : (compact ? "},{" : "}, {\n");
     for (const Vec3b& c : palette) {
         if (compact) retval += "{" + std::to_string(c[2] / 255.0) + "," + std::to_string(c[1] / 255.0) + "," + std::to_string(c[0] / 255.0) + "},";
         else retval += "    {" + std::to_string(c[2] / 255.0) + ", " + std::to_string(c[1] / 255.0) + ", " + std::to_string(c[0] / 255.0) + "},\n";
@@ -1484,10 +1484,10 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("output", "o", "Output file path", false, "path", true));
     options.addOption(Option("lua", "l", "Output a Lua script file (default for images; only does one frame)"));
     options.addOption(Option("raw", "r", "Output a rawmode-based image/video file (default for videos)"));
+    options.addOption(Option("blit-image", "b", "Output a blit image (BIMG) format image/animation file"));
     options.addOption(Option("32vid", "3", "Output a 32vid format binary video file with compression + audio"));
     options.addOption(Option("http", "s", "Serve an HTTP server that has each frame split up + a player program", false, "port", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("websocket", "w", "Serve a WebSocket that sends the image/video with audio", false, "port", true).validator(new IntValidator(1, 65535)));
-    options.addOption(Option("blit-image", "b", "Output a blit image (BIMG) format image/animation file"));
     options.addOption(Option("default-palette", "p", "Use the default CC palette instead of generating an optimized one"));
     options.addOption(Option("threshold", "t", "Use thresholding instead of dithering"));
     options.addOption(Option("octree", "8", "Use octree for higher quality color conversion (slower)"));
@@ -1810,7 +1810,7 @@ int main(int argc, const char * argv[]) {
         time_t now = time(0);
         struct tm * time = gmtime(&now);
         strftime(timestr, 26, "%FT%T%z", time);
-        outfile << "    creator = 'sanjuuni',\n    version = '1.0',\n    secondsPerFrame = " << (1.0 / fps) << ",\n    animation = " << (nframe > 1 ? "true" : "false") << ",\n    date = '" << timestr << "',\n    title = '" << input << "'\n}\n";
+        outfile << "creator = 'sanjuuni',\nversion = '1.0',\nsecondsPerFrame = " << (1.0 / fps) << ",\nanimation = " << (nframe > 1 ? "true" : "false") << ",\ndate = '" << timestr << "',\ntitle = '" << input << "'\n}\n";
     }
 cleanup:
     std::cerr << "\rframe " << nframe << "/" << format_ctx->streams[video_stream]->nb_frames << "\n";
