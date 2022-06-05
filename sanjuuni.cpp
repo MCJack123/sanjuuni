@@ -53,6 +53,8 @@ extern "C" {
 #include <mutex>
 #include <array>
 #include <queue>
+#include <functional>
+#include <atomic>
 #include <condition_variable>
 #include <unordered_map>
 #include <csignal>
@@ -160,6 +162,62 @@ public:
         return vec[y*width+x];
     }
 };
+class WorkQueue {
+    std::vector<std::thread> threads;
+    std::queue<std::pair<std::function<void(void*)>, void*>> work;
+    std::mutex notify_lock, finish_lock;
+    std::condition_variable notify, finish;
+    bool exiting = false;
+    std::atomic_int finish_count;
+    int expected_finish_count = 0;
+    void worker() {
+        while (!exiting) {
+            std::unique_lock<std::mutex> lock(notify_lock);
+            if (work.empty()) notify.wait(lock);
+            if (!work.empty()) {
+                std::pair<std::function<void(void*)>, void*> fn = work.front();
+                work.pop();
+                lock.unlock();
+                fn.first(fn.second);
+                std::unique_lock<std::mutex> lock(finish_lock);
+                finish_count++;
+                finish.notify_all();
+            }
+        }
+    }
+public:
+    WorkQueue(): WorkQueue(std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 8) {}
+    WorkQueue(int nthreads) {
+        finish_count = 0;
+        for (int i = 0; i < nthreads; i++) threads.push_back(std::thread(std::bind(&WorkQueue::worker, this)));
+    }
+    ~WorkQueue() {
+        exiting = true;
+        notify.notify_all();
+        for (int i = 0; i < threads.size(); i++) threads[i].join();
+    }
+    void push(const std::function<void()>& fn) {
+        std::unique_lock<std::mutex> lock(notify_lock);
+        work.push(std::make_pair((std::function<void(void*)>)[fn](void*){fn();}, (void*)NULL));
+        expected_finish_count++;
+        notify.notify_one();
+    }
+    void push(const std::function<void(void*)>& fn, void* arg = NULL) {
+        std::unique_lock<std::mutex> lock(notify_lock);
+        work.push(std::make_pair(fn, arg));
+        expected_finish_count++;
+        notify.notify_one();
+    }
+    void wait() {
+        while (true) {
+            std::unique_lock<std::mutex> lock(finish_lock);
+            if (work.empty() && finish_count >= expected_finish_count) break;
+            finish.wait(lock);
+        }
+        finish_count = 0;
+        expected_finish_count = 0;
+    }
+};
 typedef vector2d<uint8_t> Mat1b;
 typedef vector2d<Vec3b> Mat;
 #undef min
@@ -174,6 +232,7 @@ static uint8_t * audioStorage = NULL;
 static long audioStorageSize = 0, totalFrames = 0;
 static std::mutex exitLock, streamedLock;
 static std::condition_variable exitNotify, streamedNotify;
+static WorkQueue work;
 static bool streamed = false;
 static const char * hexstr = "0123456789abcdef";
 static const std::vector<Vec3b> defaultPalette = {
@@ -532,11 +591,11 @@ void initCL() {
     }*/
 }
 
-static std::vector<Vec3b> medianCut(std::vector<Vec3b>& pal, int num, int lastComponent) {
+static void medianCut(std::vector<Vec3b>& pal, int num, int lastComponent, std::vector<Vec3b>::iterator res) {
     if (num == 1) {
         Vec3d sum = {0, 0, 0};
         for (const Vec3b& v : pal) sum += v;
-        return {Vec3b(sum / (double)pal.size())};
+        *res = Vec3b(sum / (double)pal.size());
     } else {
         uint8_t red[2] = {255, 0}, green[2] = {255, 0}, blue[2] = {255, 0};
         for (const Vec3b& v : pal) {
@@ -556,12 +615,8 @@ static std::vector<Vec3b> medianCut(std::vector<Vec3b>& pal, int num, int lastCo
             else if (abs(ranges[maxComponent] - ranges[(maxComponent+2)%3]) < 8) maxComponent = (maxComponent + 2) % 3;
         }
         std::sort(pal.begin(), pal.end(), [maxComponent](const Vec3b& a, const Vec3b& b)->bool {return a[maxComponent] < b[maxComponent];});
-        std::vector<Vec3b> a(pal.begin(), pal.begin() + pal.size() / 2), b(pal.begin() + pal.size() / 2, pal.end());
-        std::vector<Vec3b> ar, br;
-        std::thread at([&ar, &a, num, maxComponent](){ar = medianCut(a, num / 2, maxComponent);}), bt([&br, &b, num, maxComponent](){br = medianCut(b, num / 2, maxComponent);});
-        at.join(); bt.join();
-        for (const Vec3b& v : br) ar.push_back(v);
-        return ar;
+        work.push([res, num, maxComponent](void* v){medianCut(*(std::vector<Vec3b>*)v, num / 2, maxComponent, res); delete (std::vector<Vec3b>*)v;}, new std::vector<Vec3b>(pal.begin(), pal.begin() + pal.size() / 2));
+        work.push([res, num, maxComponent](void* v){medianCut(*(std::vector<Vec3b>*)v, num / 2, maxComponent, res + (num / 2)); delete (std::vector<Vec3b>*)v;}, new std::vector<Vec3b>(pal.begin() + pal.size() / 2, pal.end()));
     }
 }
 
@@ -843,52 +898,180 @@ std::vector<Vec3b> reducePalette(const Mat& image, int numColors, octree_tree * 
         std::vector<Vec3b> uniq(pal);
         uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
         if (numColors >= uniq.size()) return uniq;
-        pal = medianCut(pal, numColors, -1);
+        std::vector<Vec3b> newpal(numColors);
+        medianCut(pal, numColors, -1, newpal.begin());
+        work.wait();
         // Move the darkest color to 15, and the lightest to 0
         // This fixes some background issues & makes subtitles a bit simpler
-        std::vector<Vec3b>::iterator darkest = pal.begin(), lightest = pal.begin();
-        for (auto it = pal.begin(); it != pal.end(); it++) {
+        std::vector<Vec3b>::iterator darkest = newpal.begin(), lightest = newpal.begin();
+        for (auto it = newpal.begin(); it != newpal.end(); it++) {
             if ((int)(*it)[0] + (int)(*it)[1] + (int)(*it)[2] < (int)(*darkest)[0] + (int)(*darkest)[1] + (int)(*darkest)[2]) darkest = it;
             if ((int)(*it)[0] + (int)(*it)[1] + (int)(*it)[2] > (int)(*lightest)[0] + (int)(*lightest)[1] + (int)(*lightest)[2]) lightest = it;
         }
         Vec3b d = *darkest, l = *lightest;
-        if (darkest == lightest)  pal.erase(darkest);
+        if (darkest == lightest) newpal.erase(darkest);
         else if (darkest > lightest) {
-            pal.erase(darkest);
-            pal.erase(lightest);
+            newpal.erase(darkest);
+            newpal.erase(lightest);
         } else {
-            pal.erase(lightest);
-            pal.erase(darkest);
+            newpal.erase(lightest);
+            newpal.erase(darkest);
         }
-        pal.insert(pal.begin(), l);
-        pal.push_back(d);
-        return pal;
+        newpal.insert(newpal.begin(), l);
+        newpal.push_back(d);
+        return newpal;
     }
+}
+
+struct kmeans_state {
+    int i, numColors;
+    std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> *colors, *newColors;
+    std::vector<std::mutex*>* locks;
+    bool * changed;
+};
+
+static void kMeans_bucket(void* s) {
+    kmeans_state * state = (kmeans_state*)s;
+    std::vector<std::vector<const Vec3d*>> vec(state->numColors);
+    for (const Vec3d* color : (*state->colors)[state->i].second) {
+        int nearest = 0;
+        double dist = sqrt(((double)(*state->newColors)[0].first[0] - (*color)[0])*((double)(*state->newColors)[0].first[0] - (*color)[0]) +
+                           ((double)(*state->newColors)[0].first[1] - (*color)[1])*((double)(*state->newColors)[0].first[1] - (*color)[1]) +
+                           ((double)(*state->newColors)[0].first[2] - (*color)[2])*((double)(*state->newColors)[0].first[2] - (*color)[2]));
+        for (int j = 1; j < state->numColors; j++) {
+            double d = sqrt(((double)(*state->newColors)[j].first[0] - (*color)[0])*((double)(*state->newColors)[j].first[0] - (*color)[0]) +
+                            ((double)(*state->newColors)[j].first[1] - (*color)[1])*((double)(*state->newColors)[j].first[1] - (*color)[1]) +
+                            ((double)(*state->newColors)[j].first[2] - (*color)[2])*((double)(*state->newColors)[j].first[2] - (*color)[2]));
+            if (d < dist) {
+                nearest = j;
+                dist = d;
+            }
+        }
+        vec[nearest].push_back(color);
+    }
+    for (int j = 0; j < state->numColors; j++) {
+        (*state->locks)[j]->lock();
+        (*state->newColors)[j].second.insert((*state->newColors)[j].second.end(), vec[j].begin(), vec[j].end());
+        (*state->locks)[j]->unlock();
+    }
+}
+
+static void kMeans_recenter(void* s) {
+    kmeans_state * state = (kmeans_state*)s;
+    Vec3d sum {0, 0, 0};
+    int size = 0;
+    for (const Vec3d* c : (*state->newColors)[state->i].second) {
+        sum += *c;
+        size++;
+    }
+    if (size == 0) return;
+    sum = sum / size;
+    if (Vec3b(sum) != Vec3b((*state->colors)[state->i].first)) *state->changed = true;
+    (*state->newColors)[state->i].first = sum;
+    (*state->newColors)[state->i].second.clear();
+}
+
+std::vector<Vec3b> kMeans(const Mat& image, int numColors) {
+    Vec3d * originalColors = new Vec3d[image.width * image.height];
+    std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> colorsA, colorsB;
+    std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> *colors = &colorsA, *newColors = &colorsB;
+    std::vector<kmeans_state> states(numColors);
+    std::vector<std::mutex*> locks;
+    bool changed = true;
+    // get initial centroids
+    // TODO: optimize
+    std::vector<Vec3b> med = reducePalette(image, numColors, NULL);
+    for (int i = 0; i < numColors; i++) colors->push_back(std::make_pair(med[i], std::vector<const Vec3d*>()));
+    // first loop
+    // place all colors in nearest bucket
+    for (int y = 0; y < image.height; y++) {
+        for (int x = 0; x < image.width; x++) {
+            Vec3d c = Vec3d(image[y][x]);
+            int nearest = 0;
+            Vec3d v = (*colors)[0].first - c;
+            double dist = sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+            for (int i = 1; i < numColors; i++) {
+                v = (*colors)[i].first - c;
+                double d = sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+                if (d < dist) {
+                    nearest = i;
+                    dist = d;
+                }
+            }
+            originalColors[y*image.width+x] = c;
+            (*colors)[nearest].second.push_back(&originalColors[y*image.width+x]);
+        }
+    }
+    // generate new centroids
+    for (int i = 0; i < numColors; i++) {
+        states[i].i = i;
+        states[i].numColors = numColors;
+        states[i].locks = &locks;
+        states[i].changed = &changed;
+        Vec3d sum;
+        int size = 0;
+        for (const Vec3d* c : (*colors)[i].second) {
+            sum += *c;
+            size++;
+        }
+        sum = size == 0 ? sum : sum / size;
+        newColors->push_back(std::make_pair(sum, std::vector<const Vec3d*>()));
+    }
+    // loop
+    for (int i = 0; i < numColors; i++) locks.push_back(new std::mutex());
+    for (int loop = 0; loop < 100 && changed; loop++) {
+        changed = false;
+        // place all colors in nearest new bucket
+        for (int i = 0; i < numColors; i++) {
+            states[i].colors = colors;
+            states[i].newColors = newColors;
+            work.push(kMeans_bucket, &states[i]);
+        }
+        work.wait();
+        auto tmp = colors;
+        colors = newColors;
+        newColors = tmp;
+        // generate new centroids
+        for (int i = 0; i < numColors; i++) {
+            states[i].colors = colors;
+            states[i].newColors = newColors;
+            work.push(kMeans_recenter, &states[i]);
+        }
+        work.wait();
+    }
+    // make final palette
+    std::vector<Vec3b> retval;
+    for (int i = 0; i < numColors; i++) {
+        retval.push_back(Vec3b((*newColors)[i].first));
+        delete locks[i];
+    }
+    delete[] originalColors;
+    return retval;
 }
 
 static Vec3b nearestColor(const std::vector<Vec3b>& palette, const Vec3d& color, int* _n = NULL) {
     double n, dist = 1e100;
     for (int i = 0; i < palette.size(); i++) {
-        Vec3d v = palette[i];
-        double d = sqrt((v[0] - color[0])*(v[0] - color[0]) + (v[1] - color[1])*(v[1] - color[1]) + (v[2] - color[2])*(v[2] - color[2]));
+        double d = sqrt(((double)palette[i][0] - color[0])*((double)palette[i][0] - color[0]) +
+                        ((double)palette[i][1] - color[1])*((double)palette[i][1] - color[1]) +
+                        ((double)palette[i][2] - color[2])*((double)palette[i][2] - color[2]));
         if (d < dist) {n = i; dist = d;}
     }
     if (_n) *_n = n;
     return palette[n];
 }
 
-static void thresholdWorker(const Mat * in, Mat * out, const std::vector<Vec3b> * palette, std::queue<int> * queue, std::mutex * mtx) {
-    while (true) {
-        mtx->lock();
-        if (queue->empty()) {
-            mtx->unlock();
-            return;
-        }
-        int row = queue->front();
-        queue->pop();
-        mtx->unlock();
-        for (int x = 0; x < in->width; x++) out->at(row, x) = nearestColor(*palette, in->at(row, x));
-    }
+struct threshold_state {
+    int i;
+    const Mat * image;
+    Mat * output;
+    const std::vector<Vec3b> * palette;
+};
+
+static void thresholdImage_worker(void* s) {
+    threshold_state * state = (threshold_state*)s;
+    for (int x = 0; x < state->image->width; x++) state->output->at(state->i, x) = nearestColor(*state->palette, state->image->at(state->i, x));
+    delete state;
 }
 
 Mat thresholdImage(const Mat& image, const std::vector<Vec3b>& palette) {
@@ -898,16 +1081,9 @@ Mat thresholdImage(const Mat& image, const std::vector<Vec3b>& palette) {
         // Use OpenCL for computation
     } else {
         // Use normal CPU for computation
-        std::queue<int> height;
-        std::mutex mtx;
-        std::vector<std::thread*> thread_pool;
-        unsigned nthreads = std::thread::hardware_concurrency();
-        if (!nthreads) nthreads = 8; // default if no value is available
-        mtx.lock(); // pause threads until queue is filled
-        for (int i = 0; i < nthreads; i++) thread_pool.push_back(new std::thread(thresholdWorker, &image, &output, &palette, &height, &mtx));
-        for (int i = 0; i < image.height; i++) height.push(i);
-        mtx.unlock(); // release threads to start working
-        for (int i = 0; i < nthreads; i++) {thread_pool[i]->join(); delete thread_pool[i];}
+        for (int i = 0; i < image.height; i++)
+            work.push(thresholdImage_worker, new threshold_state {i, &image, &output, &palette});
+        work.wait();
     }
     return output;
 }
@@ -940,18 +1116,18 @@ Mat1b rgbToPaletteImage(const Mat& image, const std::vector<Vec3b>& palette) {
     return output;
 }
 
-static void ccImageWorker(uchar * colors, uchar * character, uchar * color, uchar3 * palette, std::queue<int> * queue, std::mutex * mtx) {
-    while (true) {
-        mtx->lock();
-        if (queue->empty()) {
-            mtx->unlock();
-            return;
-        }
-        int offset = queue->front();
-        queue->pop();
-        mtx->unlock();
-        toCCPixel(colors + (offset * 6), character + offset, color + offset, palette);
-    }
+struct makeCCImage_state {
+    int i;
+    uchar* colors;
+    uchar** chars;
+    uchar** cols;
+    uchar3 * pal;
+};
+
+static void makeCCImage_worker(void* s) {
+    makeCCImage_state * state = (makeCCImage_state*)s;
+    toCCPixel(state->colors + (state->i * 6), *state->chars + state->i, *state->cols + state->i, state->pal);
+    delete state;
 }
 
 void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols) {
@@ -975,16 +1151,9 @@ void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** 
         // Use OpenCL for computation
     } else {
         // Use normal CPU for computation
-        std::queue<int> offsets;
-        std::mutex mtx;
-        std::vector<std::thread*> thread_pool;
-        unsigned nthreads = std::thread::hardware_concurrency();
-        if (!nthreads) nthreads = 8; // default if no value is available
-        mtx.lock(); // pause threads until queue is filled
-        for (int i = 0; i < nthreads; i++) thread_pool.push_back(new std::thread(ccImageWorker, colors, *chars, *cols, pal, &offsets, &mtx));
-        for (int i = 0; i < (height / 3) * (width / 2); i++) offsets.push(i);
-        mtx.unlock(); // release threads to start working
-        for (int i = 0; i < nthreads; i++) {thread_pool[i]->join(); delete thread_pool[i];}
+        for (int i = 0; i < (height / 3) * (width / 2); i++)
+            work.push(makeCCImage_worker, new makeCCImage_state {i, colors, chars, cols, pal});
+        work.wait();
     }
     delete[] pal;
     delete[] colors;
@@ -1005,7 +1174,7 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
         if (compact) retval << "{\"" << text << "\",\"" << fg << "\",\"" << bg << "\"},";
         else retval << "    {\n        \"" << text << "\",\n        \"" << fg << "\",\n        \"" << bg << "\"\n    },\n";
     }
-    retval << embedPalette ? "    palette = {\n" : (compact ? "},{" : "}, {\n");
+    retval << (embedPalette ? "    palette = {\n" : (compact ? "},{" : "}, {\n"));
     for (const Vec3b& c : palette) {
         if (compact) retval << "{" << std::to_string(c[2] / 255.0) << "," << std::to_string(c[1] / 255.0) << "," << std::to_string(c[0] / 255.0) << "},";
         else retval << "    {" << std::to_string(c[2] / 255.0) << ", " << std::to_string(c[1] / 255.0) << ", " << std::to_string(c[0] / 255.0) << "},\n";
@@ -1249,7 +1418,8 @@ public:
                     if (buf[0] == 'v') {
                         int frame = std::stoi(std::string(buf + 1, n - 1));
                         if (frame >= frameStorage.size() || frame < 0) ws.sendFrame("!", 1, WebSocket::FRAME_TEXT);
-                        else ws.sendFrame(frameStorage[frame].c_str(), frameStorage[frame].size(), WebSocket::FRAME_BINARY);
+                        else for (size_t i = 0; i < frameStorage[frame].size(); i += 65535)
+                            ws.sendFrame(frameStorage[frame].c_str() + i, min(frameStorage[frame].size() - i, 65535UL), WebSocket::FRAME_BINARY);
                         if (streamed) frameStorage[frame] = "";
                     } else if (buf[0] == 'a') {
                         int offset = std::stoi(std::string(buf + 1, n - 1));
@@ -1510,6 +1680,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("default-palette", "p", "Use the default CC palette instead of generating an optimized one"));
     options.addOption(Option("threshold", "t", "Use thresholding instead of dithering"));
     options.addOption(Option("octree", "8", "Use octree for higher quality color conversion (slower)"));
+    options.addOption(Option("kmeans", "k", "Use k-means for highest quality color conversion (slowest)"));
     options.addOption(Option("5bit", "5", "Use 5-bit codes in 32vid (internal testing)"));
     options.addOption(Option("compression", "c", "Compression type for 32vid videos", false, "none|lzw|deflate", true).validator(new RegExpValidator("^(none|lzw|deflate)$")));
     options.addOption(Option("compression-level", "L", "Compression level for 32vid videos when using DEFLATE", false, "1-9", true).validator(new IntValidator(1, 9)));
@@ -1520,7 +1691,7 @@ int main(int argc, const char * argv[]) {
     argparse.setUnixStyle(true);
 
     std::string input, output, subtitle;
-    bool useDefaultPalette = false, noDither = false, useOctree = false, use5bit = false;
+    bool useDefaultPalette = false, noDither = false, useOctree = false, use5bit = false, useKmeans = false;
     OutputType mode = OutputType::Default;
     int compression = VID32_FLAG_VIDEO_COMPRESSION_DEFLATE;
     int port = 80, width = -1, height = -1, zlibCompression = 5;
@@ -1541,6 +1712,7 @@ int main(int argc, const char * argv[]) {
                 else if (option == "default-palette") useDefaultPalette = true;
                 else if (option == "threshold") noDither = true;
                 else if (option == "octree") useOctree = true;
+                else if (option == "kmeans") useKmeans = true;
                 else if (option == "5bit") use5bit = true;
                 else if (option == "compression") {
                     if (arg == "none") compression = VID32_FLAG_VIDEO_COMPRESSION_NONE;
@@ -1709,7 +1881,7 @@ int main(int argc, const char * argv[]) {
                     resize_ctx = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format, width, height, AV_PIX_FMT_BGR24, SWS_BICUBIC, NULL, NULL, NULL);
                 }
                 Mat rs(width, height);
-                uint8_t * data = new uint8_t[width * height * 3];
+                uint8_t * data = new uint8_t[width * height * 4];
                 int stride[3] = {width * 3, width * 3, width * 3};
                 uint8_t * ptrs[3] = {data, data + 1, data + 2};
                 sws_scale(resize_ctx, frame->data, frame->linesize, 0, frame->height, ptrs, stride);
@@ -1720,6 +1892,7 @@ int main(int argc, const char * argv[]) {
                 std::vector<Vec3b> palette;
                 octree_tree tree;
                 if (useDefaultPalette) palette = defaultPalette;
+                else if (useKmeans) palette = kMeans(rs, 16);
                 else palette = reducePalette(rs, 16, useOctree ? &tree : NULL);
                 if (useOctree && !useDefaultPalette) octree_free_node(tree.root);
                 if (noDither) out = thresholdImage(rs, palette);

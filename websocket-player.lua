@@ -14,6 +14,7 @@ parallel.waitForAll(function()
         lock = true
         ws.send("v" .. f)
         local frame, ok = ws.receive(1)
+        if #frame == 65535 then frame = frame .. ws.receive(1) end
         lock = false
         if not ok then break end
         local image, palette = assert(load(frame, "=frame", "t", {}))()
@@ -37,7 +38,7 @@ end, function()
         audio = {audio:byte(1, -1)}
         for i = 1, #audio do audio[i] = audio[i] - 128 end
         pos = pos + #audio
-        if not speaker.playAudio(audio) then repeat local ev, sp = os.pullEvent("speaker_audio_empty") until sp == peripheral.getName(speaker) end
+        while not speaker.playAudio(audio) do repeat local ev, sp = os.pullEvent("speaker_audio_empty") until sp == peripheral.getName(speaker) end
     end
 end)
 ws.close()
