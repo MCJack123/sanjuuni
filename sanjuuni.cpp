@@ -29,13 +29,17 @@ extern "C" {
 //#include <CL/opencl.hpp>
 #include <Poco/Base64Encoder.h>
 #include <Poco/Checksum.h>
+#include <Poco/URI.h>
 #include <Poco/Util/OptionProcessor.h>
 #include <Poco/Util/OptionSet.h>
 #include <Poco/Util/OptionException.h>
 #include <Poco/Util/IntValidator.h>
 #include <Poco/Util/RegExpValidator.h>
 #include <Poco/Util/HelpFormatter.h>
+#include <Poco/Net/Context.h>
 #include <Poco/Net/NetException.h>
+#include <Poco/Net/HTTPClientSession.h>
+#include <Poco/Net/HTTPSClientSession.h>
 #include <Poco/Net/HTTPRequest.h>
 #include <Poco/Net/HTTPRequestHandler.h>
 #include <Poco/Net/HTTPResponse.h>
@@ -1395,6 +1399,50 @@ public:
     };
 };
 
+static void serveWebSocket(WebSocket& ws, double * fps) {
+    char buf[256];
+    int n, flags;
+    do {
+        flags = 0;
+        try {n = ws.receiveFrame(buf, 256, flags);}
+        catch (Poco::TimeoutException &e) {continue;}
+        if (n > 0) {
+            //std::cout << std::string(buf, n) << "\n";
+            if (streamed) {
+                std::unique_lock<std::mutex> lock(streamedLock);
+                streamedNotify.notify_all();
+                streamedNotify.wait(lock);
+            }
+            if (buf[0] == 'v') {
+                int frame = std::stoi(std::string(buf + 1, n - 1));
+                if (frame >= frameStorage.size() || frame < 0) ws.sendFrame("!", 1, WebSocket::FRAME_TEXT);
+                else for (size_t i = 0; i < frameStorage[frame].size(); i += 65535)
+                    ws.sendFrame(frameStorage[frame].c_str() + i, min(frameStorage[frame].size() - i, (size_t)65535), WebSocket::FRAME_BINARY);
+                if (streamed) frameStorage[frame] = "";
+            } else if (buf[0] == 'a') {
+                int offset = std::stoi(std::string(buf + 1, n - 1));
+                if (streamed) {
+                    if (audioStorageSize < 48000) {
+                        audioStorage = (uint8_t*)realloc(audioStorage, 48000);
+                        memset(audioStorage + max(audioStorageSize, 0L), 0, 48000 - max(audioStorageSize, 0L));
+                    }
+                    if (audioStorageSize > -48000) ws.sendFrame(audioStorageSize < 0 ? audioStorage - audioStorageSize : audioStorage, 48000, WebSocket::FRAME_BINARY);
+                    if (audioStorageSize > 48000) memmove(audioStorage, audioStorage + 48000, audioStorageSize - 48000);
+                    audioStorageSize -= 48000;
+                }
+                else if (offset >= audioStorageSize || offset < 0) ws.sendFrame("!", 1, WebSocket::FRAME_TEXT);
+                else ws.sendFrame(audioStorage + offset, offset + 48000 > audioStorageSize ? audioStorageSize - offset : 48000, WebSocket::FRAME_BINARY);
+            } else if (buf[0] == 'n') {
+                std::string data = std::to_string(streamed ? totalFrames : frameStorage.size());
+                ws.sendFrame(data.c_str(), data.size(), WebSocket::FRAME_TEXT);
+            } else if (buf[0] == 'f') {
+                std::string data = std::to_string(*fps);
+                ws.sendFrame(data.c_str(), data.size(), WebSocket::FRAME_TEXT);
+            }
+        }
+    } while (n > 0 && (flags & WebSocket::FRAME_OP_BITMASK) != WebSocket::FRAME_OP_CLOSE);
+}
+
 class WebSocketServer: public HTTPRequestHandler {
 public:
     double *fps;
@@ -1402,47 +1450,7 @@ public:
     void handleRequest(HTTPServerRequest &request, HTTPServerResponse &response) override {
         try {
             WebSocket ws(request, response);
-            char buf[256];
-            int n, flags;
-            do {
-                flags = 0;
-                try {n = ws.receiveFrame(buf, 256, flags);}
-                catch (Poco::TimeoutException &e) {continue;}
-                if (n > 0) {
-                    //std::cout << std::string(buf, n) << "\n";
-                    if (streamed) {
-                        std::unique_lock<std::mutex> lock(streamedLock);
-                        streamedNotify.notify_all();
-                        streamedNotify.wait(lock);
-                    }
-                    if (buf[0] == 'v') {
-                        int frame = std::stoi(std::string(buf + 1, n - 1));
-                        if (frame >= frameStorage.size() || frame < 0) ws.sendFrame("!", 1, WebSocket::FRAME_TEXT);
-                        else for (size_t i = 0; i < frameStorage[frame].size(); i += 65535)
-                            ws.sendFrame(frameStorage[frame].c_str() + i, min(frameStorage[frame].size() - i, 65535UL), WebSocket::FRAME_BINARY);
-                        if (streamed) frameStorage[frame] = "";
-                    } else if (buf[0] == 'a') {
-                        int offset = std::stoi(std::string(buf + 1, n - 1));
-                        if (streamed) {
-                            if (audioStorageSize < 48000) {
-                                audioStorage = (uint8_t*)realloc(audioStorage, 48000);
-                                bzero(audioStorage + max(audioStorageSize, 0L), 48000 - max(audioStorageSize, 0L));
-                            }
-                            if (audioStorageSize > -48000) ws.sendFrame(audioStorageSize < 0 ? audioStorage - audioStorageSize : audioStorage, 48000, WebSocket::FRAME_BINARY);
-                            if (audioStorageSize > 48000) memmove(audioStorage, audioStorage + 48000, audioStorageSize - 48000);
-                            audioStorageSize -= 48000;
-                        }
-                        else if (offset >= audioStorageSize || offset < 0) ws.sendFrame("!", 1, WebSocket::FRAME_TEXT);
-                        else ws.sendFrame(audioStorage + offset, offset + 48000 > audioStorageSize ? audioStorageSize - offset : 48000, WebSocket::FRAME_BINARY);
-                    } else if (buf[0] == 'n') {
-                        std::string data = std::to_string(streamed ? totalFrames : frameStorage.size());
-                        ws.sendFrame(data.c_str(), data.size(), WebSocket::FRAME_TEXT);
-                    } else if (buf[0] == 'f') {
-                        std::string data = std::to_string(*fps);
-                        ws.sendFrame(data.c_str(), data.size(), WebSocket::FRAME_TEXT);
-                    }
-                }
-            } while (n > 0 && (flags & WebSocket::FRAME_OP_BITMASK) != WebSocket::FRAME_OP_CLOSE);
+            serveWebSocket(ws, fps);
             try {ws.shutdown();} catch (...) {}
         } catch (Poco::Exception &e) {
             std::cerr << "WebSocket exception: " << e.displayText() << "\n";
@@ -1676,6 +1684,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("32vid", "3", "Output a 32vid format binary video file with compression + audio"));
     options.addOption(Option("http", "s", "Serve an HTTP server that has each frame split up + a player program", false, "port", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("websocket", "w", "Serve a WebSocket that sends the image/video with audio", false, "port", true).validator(new IntValidator(1, 65535)));
+    options.addOption(Option("websocket-client", "", "Connect to a WebSocket server to send image/video with audio", false, "url", true).validator(new RegExpValidator("^wss?://(?:[A-Za-z0-9!#$%&'*+\\-\\/=?^_`{|}~]+(?:\\.[A-Za-z0-9!#$%&'*+\\-\\/=?^_`{|}~]+)*|\\[[\x21-\x5A\x5E-\x7E]*\])(?::\\d+)?(?:/[^/]+)*$")));
     options.addOption(Option("streamed", "S", "For servers, encode data on-the-fly instead of doing it ahead of time (saves memory at the cost of speed and only one client)"));
     options.addOption(Option("default-palette", "p", "Use the default CC palette instead of generating an optimized one"));
     options.addOption(Option("threshold", "t", "Use thresholding instead of dithering"));
@@ -1707,6 +1716,7 @@ int main(int argc, const char * argv[]) {
                 else if (option == "32vid") mode = OutputType::Vid32;
                 else if (option == "http") {mode = OutputType::HTTP; port = std::stoi(arg);}
                 else if (option == "websocket") {mode = OutputType::WebSocket; port = std::stoi(arg);}
+                else if (option == "websocket-client") {mode = OutputType::WebSocket; output = arg; port = 0;}
                 else if (option == "blit-image") mode = OutputType::BlitImage;
                 else if (option == "streamed") streamed = true;
                 else if (option == "default-palette") useDefaultPalette = true;
@@ -1837,16 +1847,59 @@ int main(int argc, const char * argv[]) {
     }
     std::ostream& outstream = (output == "-" || output == "") ? std::cout : outfile;
     HTTPServer * srv = NULL;
+    WebSocket* ws = NULL;
     std::string videoStream;
     double fps = 0;
+    int nframe = 0;
     if (mode == OutputType::HTTP) {
         srv = new HTTPServer(new HTTPListener::Factory(&fps), port);
         srv->start();
         signal(SIGINT, sighandler);
     } else if (mode == OutputType::WebSocket) {
-        srv = new HTTPServer(new WebSocketServer::Factory(&fps), port);
-        srv->start();
-        signal(SIGINT, sighandler);
+        if (port == 0) {
+            Poco::URI uri;
+            try {
+                uri = Poco::URI(output);
+            } catch (Poco::SyntaxException &e) {
+                std::cerr << "Failed to parse URL: " << e.displayText() << "\n";
+                goto cleanup;
+            }
+            if (uri.getHost() == "localhost") uri.setHost("127.0.0.1");
+            HTTPClientSession * cs;
+            if (uri.getScheme() == "ws") cs = new HTTPClientSession(uri.getHost(), uri.getPort());
+            else if (uri.getScheme() == "wss") {
+                Context::Ptr ctx = new Context(Context::CLIENT_USE, "", Context::VERIFY_RELAXED, 9, true, "ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH");
+                addSystemCertificates(ctx);
+        #if POCO_VERSION >= 0x010A0000
+                ctx->disableProtocols(Context::PROTO_TLSV1_3);
+        #endif
+                cs = new HTTPSClientSession(uri.getHost(), uri.getPort(), ctx);
+            } else {
+                std::cerr << "Invalid scheme (this should never happen)\n";
+                goto cleanup;
+            }
+            size_t pos = output.find('/', output.find(uri.getHost()));
+            size_t hash = pos != std::string::npos ? output.find('#', pos) : std::string::npos;
+            std::string path = urlEncode(pos != std::string::npos ? output.substr(pos, hash - pos) : "/");
+            HTTPRequest request(HTTPRequest::HTTP_GET, path, HTTPMessage::HTTP_1_1);
+            request.add("User-Agent", "sanjuuni/1.0");
+            request.add("Accept-Charset", "UTF-8");
+            HTTPResponse response;
+            try {
+                ws = new WebSocket(*cs, request, response);
+            } catch (Poco::Exception &e) {
+                std::cerr << "Failed to open WebSocket: " << e.displayText() << "\n";
+                goto cleanup;
+            } catch (std::exception &e) {
+                std::cerr << "Failed to open WebSocket: " << e.what() << "\n";
+                goto cleanup;
+            }
+            std::thread(serveWebSocket, ws, &fps).detach();
+        } else {
+            srv = new HTTPServer(new WebSocketServer::Factory(&fps), port);
+            srv->start();
+            signal(SIGINT, sighandler);
+        }
     }
 
 #ifdef USE_SDL
@@ -1855,7 +1908,6 @@ int main(int argc, const char * argv[]) {
     SDL_Window * win = NULL;
 #endif
 
-    int nframe = 0;
     totalFrames = format_ctx->streams[video_stream]->nb_frames;
     while (av_read_frame(format_ctx, packet) >= 0) {
         if (packet->stream_index == video_stream) {
@@ -2028,7 +2080,15 @@ cleanup:
     avcodec_free_context(&video_codec_ctx);
     if (audio_codec_ctx) avcodec_free_context(&audio_codec_ctx);
     avformat_close_input(&format_ctx);
-    if (srv) {
+    if (ws) {
+        if (!streamed) {
+            std::cout << "Serving on port " << port << "\n";
+            std::unique_lock<std::mutex> lock(exitLock);
+            exitNotify.wait(lock);
+        }
+        ws->shutdown();
+        delete ws;
+    } else if (srv) {
         if (!streamed) {
             std::cout << "Serving on port " << port << "\n";
             std::unique_lock<std::mutex> lock(exitLock);
