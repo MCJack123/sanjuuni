@@ -17,6 +17,8 @@ AC_CHECK_HEADERS([zlib.h], [], [AC_MSG_ERROR([Could not find zlib headers.])])
 AC_CHECK_HEADERS([Poco/Base64Encoder.h], [], [AC_MSG_ERROR([Could not find Poco Foundation headers.])])
 AC_CHECK_HEADERS([Poco/Util/OptionProcessor.h], [], [AC_MSG_ERROR([Could not find Poco Util headers.])])
 AC_CHECK_HEADERS([Poco/Net/HTTPServer.h], [], [AC_MSG_ERROR([Could not find Poco Net headers.])])
+AC_CHECK_HEADERS([Poco/Net/HTTPSClientSession.h], [], [AC_MSG_ERROR([Could not find Poco NetSSL headers.])])
+AC_CHECK_HEADERS([Poco/Crypto/X509Certificate.h], [], [AC_MSG_ERROR([Could not find Poco Crypto headers.])])
 
 AC_SEARCH_LIBS(pthread_create, pthread, [], [AC_MSG_ERROR([Could not find pthread library.])])
 AC_SEARCH_LIBS(avcodec_find_decoder, avcodec, [], [AC_MSG_ERROR([Could not find libavcodec library.])])
@@ -28,6 +30,8 @@ AC_SEARCH_LIBS(compress2, z, [], [AC_MSG_ERROR([Could not find zlib library.])])
 AX_CXX_CHECK_LIB(PocoFoundation, [Poco::ASCIIEncoding], [], [AC_MSG_ERROR([Could not find Poco Foundation library.])])
 AX_CXX_CHECK_LIB(PocoUtil, [Poco::Util::Timer], [], [AC_MSG_ERROR([Could not find Poco Util library.])])
 AX_CXX_CHECK_LIB(PocoNet, [Poco::Net::HTTPRequest], [], [AC_MSG_ERROR([Could not find Poco Net library.])])
+AX_CXX_CHECK_LIB(PocoNetSSL, [Poco::Net::HTTPSClientSession], [], [AC_MSG_ERROR([Could not find Poco NetSSL library.])])
+AX_CXX_CHECK_LIB(PocoCrypto, [Poco::Crypto::X509Certificate], [], [AC_MSG_ERROR([Could not find Poco Crypto library.])])
 
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT

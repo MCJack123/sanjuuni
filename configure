@@ -4057,6 +4057,30 @@ else $as_nop
 fi
 
 done
+       for ac_header in Poco/Net/HTTPSClientSession.h
+do :
+  ac_fn_cxx_check_header_compile "$LINENO" "Poco/Net/HTTPSClientSession.h" "ac_cv_header_Poco_Net_HTTPSClientSession_h" "$ac_includes_default"
+if test "x$ac_cv_header_Poco_Net_HTTPSClientSession_h" = xyes
+then :
+  printf "%s\n" "#define HAVE_POCO_NET_HTTPSCLIENTSESSION_H 1" >>confdefs.h
+
+else $as_nop
+  as_fn_error $? "Could not find Poco NetSSL headers." "$LINENO" 5
+fi
+
+done
+       for ac_header in Poco/Crypto/X509Certificate.h
+do :
+  ac_fn_cxx_check_header_compile "$LINENO" "Poco/Crypto/X509Certificate.h" "ac_cv_header_Poco_Crypto_X509Certificate_h" "$ac_includes_default"
+if test "x$ac_cv_header_Poco_Crypto_X509Certificate_h" = xyes
+then :
+  printf "%s\n" "#define HAVE_POCO_CRYPTO_X509CERTIFICATE_H 1" >>confdefs.h
+
+else $as_nop
+  as_fn_error $? "Could not find Poco Crypto headers." "$LINENO" 5
+fi
+
+done
 
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for library containing pthread_create" >&5
 printf %s "checking for library containing pthread_create... " >&6; }
@@ -4927,6 +4951,306 @@ then :
 
 else $as_nop
   as_fn_error $? "Could not find Poco Net library." "$LINENO" 5
+fi
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for Poco::Net::HTTPSClientSession in -lPocoNetSSL" >&5
+printf %s "checking for Poco::Net::HTTPSClientSession in -lPocoNetSSL... " >&6; }
+if test ${ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession+y}
+then :
+  printf %s "(cached) " >&6
+else $as_nop
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lPocoNetSSL  $LIBS"
+case "Poco::Net::HTTPSClientSession"
+in *::*::*\(*)
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+ namespace `echo "Poco::Net::HTTPSClientSession" | sed -e "s/::.*//"`
+ { class `echo "Poco::Net::HTTPSClientSession" | sed -e "s/.*::\\(.*\\)::.*/\\1/" -e "s/(.*//"`
+   { public: int `echo "Poco::Net::HTTPSClientSession" | sed -e "s/.*:://" -e "/(/!s/..*/&()/"`;
+   };
+ }
+
+int
+main (void)
+{
+`echo "Poco::Net::HTTPSClientSession" | sed  -e "s/(.*//" -e "s/\\(.*\\)::\\(.*\\)/((\\1*)(0))->\\2/g"`()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"
+then :
+  ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession=yes
+else $as_nop
+  ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
+;; *::*::*)
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+ namespace `echo "Poco::Net::HTTPSClientSession" | sed -e "s/::.*//"`
+ { namespace `echo "Poco::Net::HTTPSClientSession" | sed -e "s/.*::\\(.*\\)::.*/\\1/"`
+   { class `echo "Poco::Net::HTTPSClientSession" | sed -e "s/.*:://"`
+      { public: `echo "Poco::Net::HTTPSClientSession" | sed -e "s/.*:://"` ();
+      };
+   }
+ }
+
+int
+main (void)
+{
+new Poco::Net::HTTPSClientSession()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"
+then :
+  ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession=yes
+else $as_nop
+  ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
+;; *::*\(*)
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+ class `echo "Poco::Net::HTTPSClientSession" | sed -e "s/\\(.*\\)::.*/\\1/" -e "s/(.*//"`
+   { public: int `echo "Poco::Net::HTTPSClientSession" | sed -e "s/.*:://" -e "/(/!s/..*/&()/"`;
+   };
+
+int
+main (void)
+{
+`echo "Poco::Net::HTTPSClientSession" | sed  -e "s/(.*//" -e "s/\\(.*\\)::\\(.*\\)/((\\1*)(0))->\\2/g"`()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"
+then :
+  ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession=yes
+else $as_nop
+  ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
+;; *::*)
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+ namespace `echo "Poco::Net::HTTPSClientSession" | sed -e "s/::.*//"`
+ { class `echo "Poco::Net::HTTPSClientSession" | sed -e "s/.*:://"`
+   { public: `echo "Poco::Net::HTTPSClientSession" | sed -e "s/.*:://"` ();
+   };
+ }
+
+int
+main (void)
+{
+new Poco::Net::HTTPSClientSession()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"
+then :
+  ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession=yes
+else $as_nop
+  ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
+;; *)
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+namespace conftest {
+  extern "C" int Poco::Net::HTTPSClientSession ();
+}
+int
+main (void)
+{
+return conftest::Poco::Net::HTTPSClientSession ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"
+then :
+  ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession=yes
+else $as_nop
+  ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
+;; esac
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession" >&5
+printf "%s\n" "$ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession" >&6; }
+if test $ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession = yes
+then :
+  printf "%s\n" "#define HAVE_LIBPOCONETSSL 1" >>confdefs.h
+
+  LIBS="-lPocoNetSSL $LIBS"
+
+else $as_nop
+  as_fn_error $? "Could not find Poco NetSSL library." "$LINENO" 5
+fi
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for Poco::Crypto::X509Certificate in -lPocoCrypto" >&5
+printf %s "checking for Poco::Crypto::X509Certificate in -lPocoCrypto... " >&6; }
+if test ${ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate+y}
+then :
+  printf %s "(cached) " >&6
+else $as_nop
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lPocoCrypto  $LIBS"
+case "Poco::Crypto::X509Certificate"
+in *::*::*\(*)
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+ namespace `echo "Poco::Crypto::X509Certificate" | sed -e "s/::.*//"`
+ { class `echo "Poco::Crypto::X509Certificate" | sed -e "s/.*::\\(.*\\)::.*/\\1/" -e "s/(.*//"`
+   { public: int `echo "Poco::Crypto::X509Certificate" | sed -e "s/.*:://" -e "/(/!s/..*/&()/"`;
+   };
+ }
+
+int
+main (void)
+{
+`echo "Poco::Crypto::X509Certificate" | sed  -e "s/(.*//" -e "s/\\(.*\\)::\\(.*\\)/((\\1*)(0))->\\2/g"`()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"
+then :
+  ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate=yes
+else $as_nop
+  ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
+;; *::*::*)
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+ namespace `echo "Poco::Crypto::X509Certificate" | sed -e "s/::.*//"`
+ { namespace `echo "Poco::Crypto::X509Certificate" | sed -e "s/.*::\\(.*\\)::.*/\\1/"`
+   { class `echo "Poco::Crypto::X509Certificate" | sed -e "s/.*:://"`
+      { public: `echo "Poco::Crypto::X509Certificate" | sed -e "s/.*:://"` ();
+      };
+   }
+ }
+
+int
+main (void)
+{
+new Poco::Crypto::X509Certificate()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"
+then :
+  ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate=yes
+else $as_nop
+  ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
+;; *::*\(*)
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+ class `echo "Poco::Crypto::X509Certificate" | sed -e "s/\\(.*\\)::.*/\\1/" -e "s/(.*//"`
+   { public: int `echo "Poco::Crypto::X509Certificate" | sed -e "s/.*:://" -e "/(/!s/..*/&()/"`;
+   };
+
+int
+main (void)
+{
+`echo "Poco::Crypto::X509Certificate" | sed  -e "s/(.*//" -e "s/\\(.*\\)::\\(.*\\)/((\\1*)(0))->\\2/g"`()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"
+then :
+  ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate=yes
+else $as_nop
+  ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
+;; *::*)
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+ namespace `echo "Poco::Crypto::X509Certificate" | sed -e "s/::.*//"`
+ { class `echo "Poco::Crypto::X509Certificate" | sed -e "s/.*:://"`
+   { public: `echo "Poco::Crypto::X509Certificate" | sed -e "s/.*:://"` ();
+   };
+ }
+
+int
+main (void)
+{
+new Poco::Crypto::X509Certificate()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"
+then :
+  ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate=yes
+else $as_nop
+  ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
+;; *)
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+namespace conftest {
+  extern "C" int Poco::Crypto::X509Certificate ();
+}
+int
+main (void)
+{
+return conftest::Poco::Crypto::X509Certificate ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"
+then :
+  ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate=yes
+else $as_nop
+  ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
+;; esac
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate" >&5
+printf "%s\n" "$ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate" >&6; }
+if test $ac_cv_lib_PocoCrypto_Poco__Crypto__X509Certificate = yes
+then :
+  printf "%s\n" "#define HAVE_LIBPOCOCRYPTO 1" >>confdefs.h
+
+  LIBS="-lPocoCrypto $LIBS"
+
+else $as_nop
+  as_fn_error $? "Could not find Poco Crypto library." "$LINENO" 5
 fi
 
 ac_config_files="$ac_config_files Makefile"
