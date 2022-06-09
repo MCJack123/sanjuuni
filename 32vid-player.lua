@@ -41,7 +41,8 @@ local inflate do
             end
         else
             for i = 1, #b do
-                s = s .. bits(b:sub(i, i):byte(), 8):reverse()
+                s = s .. bits(b:byte(i), 8):reverse()
+                assert(#s == i * 8, s)
             end
         end
         return s
@@ -163,7 +164,12 @@ local inflate do
 
         function stream:read(n, reverse)
             local start = floor(curr/8) + offset + 1
-            local b = bits(raw:sub(start, start + ceil(n/8))):sub(curr%8 + 1, curr%8 + n)
+            local bb = ""
+            for i = start, start + ceil(n/8) do
+                local b = raw:byte(i)
+                for j = 0, 7 do bb = bb .. bit32.extract(b, j, 1) end
+            end
+            local b = bb:sub(curr%8 + 1, curr%8 + n)
             curr = curr + n
             return reverse and b or b:reverse()
         end
@@ -352,7 +358,7 @@ local inflate do
 
     local function decode_dist(value, bits)
         assert(value >= 0 and value <= 29, "value out of range")
-        assert(#bits == extra_bits(value), "wrong number of extra bits")
+        assert(#bits == extra_bits(value), "wrong number of extra bits)")
         return bint(bits) + a(value - 1)
     end
     decode_dist = memoize(decode_dist)
@@ -362,8 +368,6 @@ local inflate do
         local ostream = output_stream()
         repeat
             local bfinal, btype = bint(stream:read(1)), bint(stream:read(2))
-            print(ostream:pos())
-            sleep(0)
             assert(btype == 2, "compression method not supported")
             local ll_decode, d_decode = code_trees(stream)
             while true do
@@ -392,29 +396,97 @@ if not file then error(err) end
 if file.read(4) ~= "32VD" then file.close() error("Not a 32vid file") end
 local width, height, fps, nStreams, flags = ("<HHBBH"):unpack(file.read(8))
 local video, audio, subtitles
+--local log = fs.open("32vid-log.txt", "w")
 for _ = 1, nStreams do
-    local size, nFrames, type = ("<IIB"):unpack(file.read(9))
-    print(size, nFrames, type)
-    if type == 0 and not video then
+    local size, nFrames, frameType = ("<IIB"):unpack(file.read(9))
+    print(size, nFrames, frameType)
+    if frameType == 0 and not video then
         local data = file.read(size)
         if bit32.band(flags, 3) == 2 then data = inflate(data) end
         video = {}
         local pos = 1
+        local start = os.epoch "utc"
         for i = 1, nFrames do
-            if i % 100 == 0 or i >= nFrames - 10 then print(i) sleep(0) end
+            if i % 100 == 0 or i >= nFrames - 10 then print(i, os.epoch "utc" - start) start = os.epoch "utc" sleep(0) --[[log.flush()]] end
             local frame = {palette = {}}
             local tmp, tmppos = 0, 0
-            local use5bit = bit32.btest(flags, 16)
+            local use5bit, customcompress = bit32.btest(flags, 16), bit32.band(flags, 3) == 3
             local bits, bytes, len, unpack = use5bit and 5 or 6, use5bit and 5 or 3, use5bit and 7 or 3, use5bit and ">I5" or ">I3"
+            local codetree = {}
+            local solidchar
             local function readField()
-                local n
-                if tmppos * bits + bits > 32 then n = bit32.extract(math.floor(tmp / 0x1000000), tmppos * bits - 24, bits)
-                else n = bit32.extract(tmp, tmppos * bits, bits) end
-                tmppos = tmppos - 1
-                if tmppos < 0 then tmp, pos = unpack:unpack(data, pos) tmppos = len end
-                return n
+                if customcompress then
+                    if solidchar then return solidchar end
+                    -- MARK: Huffman decoding
+                    local node = codetree
+                    while true do
+                        local n = bit32.extract(tmp, tmppos, 1)
+                        tmppos = tmppos - 1
+                        if tmppos < 0 then tmp, pos, tmppos = data:byte(pos), pos + 1, 7 end
+                        if type(node) ~= "table" then error(("Invalid tree state: position %X, frame %d"):format(pos, i)) end
+                        if type(node[n]) == "number" then return node[n]
+                        else node = node[n] end
+                    end
+                else
+                    local n
+                    if tmppos * bits + bits > 32 then n = bit32.extract(math.floor(tmp / 0x1000000), tmppos * bits - 24, bits)
+                    else n = bit32.extract(tmp, tmppos * bits, bits) end
+                    tmppos = tmppos - 1
+                    if tmppos < 0 then tmp, pos = unpack:unpack(data, pos) tmppos = len end
+                    return n
+                end
             end
-            readField()
+            if customcompress then
+                -- MARK: Huffman tree reconstruction
+                -- read bit lengths
+                --log.writeLine(("%x"):format(pos+20))
+                local bitlen = {}
+                if use5bit then
+                    for j = 0, 15 do
+                        bitlen[j*2+1], bitlen[j*2+2] = {s = j*2, l = bit32.rshift(data:byte(pos+j), 4)}, {s = j*2+1, l = bit32.band(data:byte(pos+j), 0x0F)}
+                    end
+                    pos = pos + 16
+                else
+                    for j = 0, 7 do
+                        tmp, pos = (">I5"):unpack(data, pos)
+                        bitlen[j*8+1] = {s = j*8+1, l = math.floor(tmp / 0x800000000)}
+                        bitlen[j*8+2] = {s = j*8+2, l = math.floor(tmp / 0x40000000) % 32}
+                        for k = 3, 8 do bitlen[j*8+k] = {s = j*8+k, l = bit32.extract(tmp, (8-k)*5, 5)} end
+                    end
+                end
+                do
+                    local j = 1
+                    while j <= #bitlen do
+                        if bitlen[j].l == 0 then table.remove(bitlen, j)
+                        else j = j + 1 end
+                    end
+                end
+                if #bitlen == 0 then
+                    -- screen is solid character
+                    solidchar = data:byte(pos)
+                    pos = pos + 1
+                else
+                    -- reconstruct codes from bit lengths
+                    table.sort(bitlen, function(a, b) if a.l == b.l then return a.s < b.s else return a.l < b.l end end)
+                    bitlen[1].c = 0
+                    for j = 2, #bitlen do bitlen[j].c = bit32.lshift(bitlen[j-1].c + 1, bitlen[j].l - bitlen[j-1].l) end
+                    -- create tree from codes
+                    for j = 1, #bitlen do
+                        local c = bitlen[j].c
+                        local node = codetree
+                        for k = bitlen[j].l - 1, 1, -1 do
+                            local n = bit32.extract(c, k, 1)
+                            if not node[n] then node[n] = {} end
+                            node = node[n]
+                            if type(node) == "number" then error(("Invalid tree state: position %X, frame %d, #bitlen = %d, current entry = %d"):format(pos, i, #bitlen, j)) end
+                        end
+                        local n = bit32.extract(c, 0, 1)
+                        node[n] = bitlen[j].s
+                    end
+                    -- read first byte
+                    tmp, tmppos, pos = data:byte(pos), 7, pos + 1
+                end
+            else readField() end
             for y = 1, height do
                 local line = {"", "", "", {}}
                 for x = 1, width do
@@ -425,25 +497,53 @@ for _ = 1, nStreams do
                 end
                 frame[y] = line
             end
-            for y = 1, height do
-                local line = frame[y]
-                for x = 1, width do
-                    local c = data:byte(pos)
-                    pos = pos + 1
-                    if line[4][x] then c = bit32.bor(bit32.band(bit32.lshift(c, 4), 0xF0), bit32.rshift(c, 4)) end
-                    line[2] = line[2] .. hexstr:sub(bit32.band(c, 15)+1, bit32.band(c, 15)+1)
-                    line[3] = line[3] .. hexstr:sub(bit32.rshift(c, 4)+1, bit32.rshift(c, 4)+1)
+            if customcompress then
+                if tmppos == 7 then pos = pos - 1 end
+                --print(("%X"):format(pos+20))
+                local ok, colordata
+                colordata, pos = ("<s4"):unpack(data, pos)
+                ok, colordata = pcall(inflate, colordata)
+                if not ok then --[[log.close()]] error(colordata, 0) end
+                local cpos = 1
+                for y = 1, height do
+                    local line = frame[y]
+                    for x = 1, width do
+                        local c = colordata:byte(cpos)
+                        cpos = cpos + 1
+                        if line[4][x] then c = bit32.bor(bit32.band(bit32.lshift(c, 4), 0xF0), bit32.rshift(c, 4)) end
+                        line[2] = line[2] .. hexstr:sub(bit32.band(c, 15)+1, bit32.band(c, 15)+1)
+                        line[3] = line[3] .. hexstr:sub(bit32.rshift(c, 4)+1, bit32.rshift(c, 4)+1)
+                    end
+                    line[4] = nil
                 end
-                line[4] = nil
+            else
+                for y = 1, height do
+                    local line = frame[y]
+                    for x = 1, width do
+                        local c = data:byte(pos)
+                        pos = pos + 1
+                        if line[4][x] then c = bit32.bor(bit32.band(bit32.lshift(c, 4), 0xF0), bit32.rshift(c, 4)) end
+                        line[2] = line[2] .. hexstr:sub(bit32.band(c, 15)+1, bit32.band(c, 15)+1)
+                        line[3] = line[3] .. hexstr:sub(bit32.rshift(c, 4)+1, bit32.rshift(c, 4)+1)
+                    end
+                    line[4] = nil
+                end
             end
             for n = 1, 16 do frame.palette[n], pos = {data:byte(pos) / 255, data:byte(pos+1) / 255, data:byte(pos+2) / 255}, pos + 3 end
             video[i] = frame
         end
-    elseif type == 1 and not audio then
+    elseif frameType == 1 and not audio then
         audio = {}
         if bit32.band(flags, 12) == 0 then
             for i = 1, size / 48000 do
-                local data = {file.read(math.min(size - (i-1) * 48000, 48000)):byte(1, -1)}
+                local data
+                if jit then
+                    data = {}
+                    for j = 0, 5 do
+                        local t = {file.read(math.min(size - (i-1) * 48000 - j * 8000, 8000)):byte(1, -1)}
+                        if #t > 0 then for k = 1, #t do data[j*8000+k] = t[k] end end
+                    end
+                else data = {file.read(math.min(size - (i-1) * 48000, 48000)):byte(1, -1)} end
                 for j = 1, #data do data[j] = data[j] - 128 end
                 audio[i] = data
             end
@@ -454,7 +554,7 @@ for _ = 1, nStreams do
                 audio[i] = decode(data)
             end
         end
-    elseif type == 8 and not subtitles then
+    elseif frameType == 8 and not subtitles then
         subtitles = {}
         for _ = 1, nFrames do
             local start, length, x, y, color, sz = ("<IIHHBxH"):unpack(file.read(14))
@@ -474,7 +574,7 @@ sleep(0)
 
 local speaker = peripheral.find "speaker"
 term.clear()
-parallel.waitForAll(function()
+local ok, err = pcall(parallel.waitForAll, function()
     local start = os.epoch "utc"
     for f, image in ipairs(video) do
         for i, v in ipairs(image.palette) do term.setPaletteColor(2^(i-1), table.unpack(v)) end
@@ -493,7 +593,7 @@ parallel.waitForAll(function()
 end, function()
     if not speaker or not speaker.playAudio or not audio then return end
     for _, chunk in ipairs(audio) do
-        if not speaker.playAudio(chunk) then repeat local ev, sp = os.pullEvent("speaker_audio_empty") until sp == peripheral.getName(speaker) end
+        while not speaker.playAudio(chunk) do repeat local ev, sp = os.pullEvent("speaker_audio_empty") until sp == peripheral.getName(speaker) end
     end
 end)
 for i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end
@@ -501,3 +601,4 @@ term.setBackgroundColor(colors.black)
 term.setTextColor(colors.white)
 term.setCursorPos(1, 1)
 term.clear()
+if not ok then printError(err) end

@@ -49,6 +49,7 @@ extern "C" {
 #include <Poco/Net/WebSocket.h>
 #include <vector>
 #include <chrono>
+#include <iomanip>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -196,6 +197,7 @@ public:
         for (int i = 0; i < nthreads; i++) threads.push_back(std::thread(std::bind(&WorkQueue::worker, this)));
     }
     ~WorkQueue() {
+        if (expected_finish_count > 0) wait();
         exiting = true;
         notify.notify_all();
         for (int i = 0; i < threads.size(); i++) threads[i].join();
@@ -1149,7 +1151,7 @@ void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** 
     *chars = new uchar[(height / 3) * (width / 2)];
     *cols = new uchar[(height / 3) * (width / 2)];
     uchar3 * pal = new uchar3[16];
-    for (int i = 0; i < palette.size(); i++) pal[i] = {palette[i][0], palette[i][1], palette[i][2]};
+    for (int i = 0; i < palette.size() && i < 16; i++) pal[i] = {palette[i][0], palette[i][1], palette[i][2]};
     initCL();
     if (/*CLPlatform() &&*/ false) {
         // Use OpenCL for computation
@@ -1287,6 +1289,104 @@ std::string make32vid_5bit(const uchar * characters, const uchar * colors, const
     return screen + col + pal;
 }
 
+struct tree_node {
+    tree_node * left = NULL;
+    tree_node * right = NULL;
+    size_t weight = 0;
+    uint8_t data = 0;
+    bool operator<(const tree_node& rhs) {return weight >= rhs.weight;}
+};
+
+struct huffman_code {
+    uint8_t symbol = 0;
+    uint8_t bits = 0;
+    uint16_t code = 0;
+    huffman_code() = default;
+    huffman_code(uint8_t s, uint8_t b, uint16_t c): symbol(s), bits(b), code(c) {}
+};
+
+static void loadCodes(tree_node * node, std::vector<huffman_code*>& codes, huffman_code * array, huffman_code partial) {
+    if (node->left && node->right) {
+        loadCodes(node->left, codes, array, {0, (uint8_t)(partial.bits + 1), (uint16_t)(partial.code << 1)});
+        loadCodes(node->right, codes, array, {0, (uint8_t)(partial.bits + 1), (uint16_t)((partial.code << 1) | 1)});
+    } else {
+        partial.symbol = node->data;
+        array[partial.symbol] = partial;
+        codes.push_back(&array[partial.symbol]);
+    }
+}
+
+struct compare_node {bool operator()(tree_node *a, tree_node *b) {return *a < *b;}};
+
+std::string make32vid_5bit_cmp(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
+    std::string screen, col, pal;
+    tree_node nodes[32];
+    tree_node internal[31];
+    tree_node * internal_next = internal;
+    for (int i = 0; i < width * height; i++) nodes[characters[i] & 0x1F].weight++;
+    for (int i = 0; i < 16; i++) {
+        if (i < palette.size()) {
+            pal += palette[i][2];
+            pal += palette[i][1];
+            pal += palette[i][0];
+        } else pal += std::string((size_t)3, (char)0);
+    }
+    // construct Huffman tree
+    std::priority_queue<tree_node*, std::vector<tree_node*>, compare_node> queue;
+    for (int i = 0; i < 32; i++) {
+        nodes[i].data = i;
+        if (nodes[i].weight) queue.push(&nodes[i]);
+    }
+    if (queue.size() == 1) {
+        // encode a full-screen pattern of the same thing
+        screen = std::string(16, '\0') + std::string(1, queue.top()->data);
+    } else {
+        while (queue.size() > 1) {
+            tree_node * parent = internal_next++;
+            parent->left = queue.top();
+            queue.pop();
+            parent->right = queue.top();
+            queue.pop();
+            parent->weight = parent->left->weight + parent->right->weight;
+            queue.push(parent);
+        }
+        // make canonical codebook
+        tree_node * root = queue.top();
+        huffman_code codebook[32];
+        std::vector<huffman_code*> codes;
+        loadCodes(root, codes, codebook, {0, 0, 0});
+        std::sort(codes.begin(), codes.end(), [](const huffman_code* a, const huffman_code* b)->bool {return a->bits == b->bits ? a->symbol < b->symbol : a->bits < b->bits;});
+        codes[0]->code = 0;
+        for (int i = 1; i < codes.size(); i++) {
+            if (codes[i]->bits > 15) throw std::logic_error("Too many bits!");
+            codes[i]->code = (codes[i-1]->code + 1) << (codes[i]->bits - codes[i-1]->bits);
+        }
+        // compress data
+        for (int i = 0; i < 32; i += 2) screen += codebook[i].bits << 4 | codebook[i+1].bits;
+        uint32_t tmp = 0;
+        int shift = 32;
+        for (int i = 0; i < width * height; i++) {
+            huffman_code& code = codebook[characters[i] & 0x1F];
+            tmp |= code.code << (shift - code.bits);
+            shift -= code.bits;
+            while (shift <= 24) {
+                screen += (uint8_t)(tmp >> 24);
+                tmp <<= 8;
+                shift += 8;
+            }
+        }
+        if (shift < 32) screen += (uint8_t)(tmp >> 24);
+    }
+    uLongf destsz = compressBound(width * height);
+    uint8_t * buf = new uint8_t[destsz+2];
+    compress(buf + 2, &destsz, colors, width * height);
+    *(uint32_t*)buf = destsz - 2;
+    col = std::string((const char*)buf, destsz + 2);
+    delete[] buf;
+    //std::cout << screen.size() << "/" << col.size() << "\n";
+    return screen + col + pal;
+}
+
 std::string make32vid_6bit(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
     std::string screen, col, pal;
     uchar lastColor = 0;
@@ -1322,6 +1422,105 @@ std::string make32vid_6bit(const uchar * characters, const uchar * colors, const
             pal += palette[i][0];
         } else pal += std::string((size_t)3, (char)0);
     }
+    return screen + col + pal;
+}
+
+std::string make32vid_6bit_cmp(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
+    std::string screen, col, pal;
+    tree_node nodes[64];
+    tree_node internal[63];
+    tree_node * internal_next = internal;
+    uchar lastColor = 0;
+    uchar * newcolors = new uchar[width*height];
+    for (int i = 0; i < width * height; i++) {
+        uchar tok = characters[i] & 0x1F;
+        uchar c = colors[i];
+        if (((c >> 4) | (c << 4)) == lastColor) {
+            c = lastColor;
+            tok |= 0x20;
+        }
+        lastColor = c;
+        newcolors[i] = c;
+        nodes[tok].weight++;
+    }
+    for (int i = 0; i < 16; i++) {
+        if (i < palette.size()) {
+            pal += palette[i][2];
+            pal += palette[i][1];
+            pal += palette[i][0];
+        } else pal += std::string((size_t)3, (char)0);
+    }
+    // construct Huffman tree
+    std::priority_queue<tree_node*, std::vector<tree_node*>, compare_node> queue;
+    for (int i = 0; i < 64; i++) {
+        nodes[i].data = i;
+        if (nodes[i].weight) queue.push(&nodes[i]);
+    }
+    if (queue.size() == 1) {
+        // encode a full-screen pattern of the same thing
+        screen = std::string(40, '\0') + std::string(1, queue.top()->data);
+    } else {
+        while (queue.size() > 1) {
+            tree_node * parent = internal_next++;
+            parent->left = queue.top();
+            queue.pop();
+            parent->right = queue.top();
+            queue.pop();
+            parent->weight = parent->left->weight + parent->right->weight;
+            queue.push(parent);
+        }
+        // make canonical codebook
+        tree_node * root = queue.top();
+        huffman_code codebook[64];
+        std::vector<huffman_code*> codes;
+        loadCodes(root, codes, codebook, {0, 0, 0});
+        std::sort(codes.begin(), codes.end(), [](const huffman_code* a, const huffman_code* b)->bool {return a->bits == b->bits ? a->symbol < b->symbol : a->bits < b->bits;});
+        codes[0]->code = 0;
+        for (int i = 1; i < codes.size(); i++) codes[i]->code = (codes[i-1]->code + 1) << (codes[i]->bits - codes[i-1]->bits);
+        // compress data
+        uint64_t next5bit = 0;
+        uchar next5bit_pos = 0;
+        for (int i = 0; i < 64; i++) {
+            next5bit = (next5bit << 5) | codebook[i].bits;
+            if (++next5bit_pos == 8) {
+                screen += (char)((next5bit >> 32) & 0xFF);
+                screen += (char)((next5bit >> 24) & 0xFF);
+                screen += (char)((next5bit >> 16) & 0xFF);
+                screen += (char)((next5bit >> 8) & 0xFF);
+                screen += (char)(next5bit & 0xFF);
+                next5bit = next5bit_pos = 0;
+            }
+        }
+        uint32_t tmp = 0;
+        int shift = 32;
+        lastColor = 0;
+        for (int i = 0; i < width * height; i++) {
+            uchar tok = characters[i] & 0x1F;
+            uchar c = colors[i];
+            if (((c >> 4) | (c << 4)) == lastColor) {
+                c = lastColor;
+                tok |= 0x20;
+            }
+            lastColor = c;
+            huffman_code& code = codebook[tok];
+            tmp |= code.code << (shift - code.bits);
+            shift -= code.bits;
+            while (shift <= 24) {
+                screen += (uint8_t)(tmp >> 24);
+                tmp <<= 8;
+                shift += 8;
+            }
+            if (shift < 32) screen += (uint8_t)(tmp >> 24);
+        }
+    }
+    uLongf destsz = compressBound(width * height);
+    uint8_t * buf = new uint8_t[destsz+2];
+    compress(buf + 2, &destsz, newcolors, width * height);
+    delete[] newcolors;
+    *(uint32_t*)buf = destsz - 2;
+    col = std::string((const char*)buf, destsz + 2);
+    delete[] buf;
+    //std::cout << screen.size() << "/" << col.size() << "\n";
     return screen + col + pal;
 }
 
@@ -1488,6 +1687,7 @@ public:
 #define VID32_FLAG_VIDEO_COMPRESSION_NONE     0x0000
 #define VID32_FLAG_VIDEO_COMPRESSION_LZW      0x0001
 #define VID32_FLAG_VIDEO_COMPRESSION_DEFLATE  0x0002
+#define VID32_FLAG_VIDEO_COMPRESSION_CUSTOM   0x0003
 #define VID32_FLAG_AUDIO_COMPRESSION_NONE     0x0000
 #define VID32_FLAG_AUDIO_COMPRESSION_DFPWM    0x0004
 #define VID32_FLAG_VIDEO_5BIT_CODES           0x0010
@@ -1692,6 +1892,14 @@ static std::string urlEncode(const std::string& tmppath) {
     return path;
 }
 
+template<class _Rep, class _Period>
+std::ostream& operator<<(std::ostream& stream, const std::chrono::duration<_Rep, _Period>& duration) {
+    if (duration >= std::chrono::hours(1)) stream << std::setw(2) << std::setfill('0') << std::right << std::chrono::duration_cast<std::chrono::hours>(duration).count() << ":";
+    stream << std::setw(2) << std::setfill('0') << std::right << (std::chrono::duration_cast<std::chrono::minutes>(duration).count() % 60) << ":";
+    stream << std::setw(2) << std::setfill('0') << std::right << (std::chrono::duration_cast<std::chrono::seconds>(duration).count() % 60);
+    return stream;
+}
+
 int main(int argc, const char * argv[]) {
     OptionSet options;
     options.addOption(Option("input", "i", "Input image or video", true, "file", true));
@@ -1710,7 +1918,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("octree", "8", "Use octree for higher quality color conversion (slower)"));
     options.addOption(Option("kmeans", "k", "Use k-means for highest quality color conversion (slowest)"));
     options.addOption(Option("5bit", "5", "Use 5-bit codes in 32vid (internal testing)"));
-    options.addOption(Option("compression", "c", "Compression type for 32vid videos", false, "none|lzw|deflate", true).validator(new RegExpValidator("^(none|lzw|deflate)$")));
+    options.addOption(Option("compression", "c", "Compression type for 32vid videos", false, "none|lzw|deflate|custom", true).validator(new RegExpValidator("^(none|lzw|deflate|custom)$")));
     options.addOption(Option("compression-level", "L", "Compression level for 32vid videos when using DEFLATE", false, "1-9", true).validator(new IntValidator(1, 9)));
     options.addOption(Option("width", "W", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("height", "H", "Resize the image to the specified height", false, "size", true).validator(new IntValidator(1, 65535)));
@@ -1747,6 +1955,7 @@ int main(int argc, const char * argv[]) {
                     if (arg == "none") compression = VID32_FLAG_VIDEO_COMPRESSION_NONE;
                     else if (arg == "lzw") compression = VID32_FLAG_VIDEO_COMPRESSION_LZW;
                     else if (arg == "deflate") compression = VID32_FLAG_VIDEO_COMPRESSION_DEFLATE;
+                    else if (arg == "custom") compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
                 } else if (option == "compression-level") zlibCompression = std::stoi(arg);
                 else if (option == "width") width = std::stoi(arg);
                 else if (option == "height") height = std::stoi(arg);
@@ -1870,6 +2079,8 @@ int main(int argc, const char * argv[]) {
     std::string videoStream;
     double fps = 0;
     int nframe = 0;
+    auto start = std::chrono::system_clock::now();
+    auto lastUpdate = std::chrono::system_clock::now() - std::chrono::seconds(1);
     if (mode == OutputType::HTTP) {
         srv = new HTTPServer(new HTTPListener::Factory(&fps), port);
         srv->start();
@@ -1937,8 +2148,13 @@ int main(int argc, const char * argv[]) {
                 else if (mode == OutputType::BlitImage) outstream << "{\n";
             }
             while ((error = avcodec_receive_frame(video_codec_ctx, frame)) == 0) {
-                std::cerr << "\rframe " << nframe++ << "/" << format_ctx->streams[video_stream]->nb_frames;
-                std::cerr.flush();
+                auto now = std::chrono::system_clock::now();
+                if (now - lastUpdate > std::chrono::milliseconds(250)) {
+                    auto t = now - start;
+                    std::cerr << "\rframe " << nframe++ << "/" << format_ctx->streams[video_stream]->nb_frames << " (elapsed " << t << ", remaining " << ((t * totalFrames / nframe) - t) << ", " << floor((double)nframe / std::chrono::duration_cast<std::chrono::seconds>(t).count()) << " fps)";
+                    std::cerr.flush();
+                    lastUpdate = now;
+                } else nframe++;
                 Mat out;
                 if (resize_ctx == NULL) {
                     if (width != -1 || height != -1) {
@@ -1985,8 +2201,14 @@ int main(int argc, const char * argv[]) {
                     outstream.flush();
                     break;
                 } case OutputType::Vid32: {
-                    if (use5bit) videoStream += make32vid_5bit(characters, colors, palette, pimg.width / 2, pimg.height / 3);
-                    else videoStream += make32vid_6bit(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    std::cout << std::hex << (videoStream.size() + 0x15) << std::endl;
+                    if (use5bit) {
+                        if (compression == VID32_FLAG_VIDEO_COMPRESSION_CUSTOM) videoStream += make32vid_5bit_cmp(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                        else videoStream += make32vid_5bit(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    } else {
+                         if (compression == VID32_FLAG_VIDEO_COMPRESSION_CUSTOM) videoStream += make32vid_6bit_cmp(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                        else videoStream += make32vid_6bit(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    }
                     break;
                 } case OutputType::HTTP: case OutputType::WebSocket: {
                     frameStorage.push_back("return " + makeTable(characters, colors, palette, pimg.width / 2, pimg.height / 3, true));
