@@ -413,18 +413,30 @@ for _ = 1, nStreams do
             local use5bit, customcompress = bit32.btest(flags, 16), bit32.band(flags, 3) == 3
             local bits, bytes, len, unpack = use5bit and 5 or 6, use5bit and 5 or 3, use5bit and 7 or 3, use5bit and ">I5" or ">I3"
             local codetree = {}
-            local solidchar
-            local function readField()
+            local solidchar, runlen
+            local function readField(isColor)
                 if customcompress then
-                    if solidchar then return solidchar end
+                    if runlen then
+                        local c = solidchar
+                        runlen = runlen - 1
+                        if runlen == 0 then runlen = nil end
+                        return c
+                    end
+                    if not isColor and solidchar then return solidchar end
                     -- MARK: Huffman decoding
                     local node = codetree
                     while true do
                         local n = bit32.extract(tmp, tmppos, 1)
                         tmppos = tmppos - 1
                         if tmppos < 0 then tmp, pos, tmppos = data:byte(pos), pos + 1, 7 end
-                        if type(node) ~= "table" then error(("Invalid tree state: position %X, frame %d"):format(pos, i)) end
-                        if type(node[n]) == "number" then return node[n]
+                        if type(node) ~= "table" then error(("Invalid tree state: position %X, frame %d"):format(pos+file.seek()-size-1, i)) end
+                        if type(node[n]) == "number" then
+                            local c = node[n]
+                            if isColor then
+                                if c > 15 then runlen = 2^(c-15)-1 return assert(solidchar)
+                                else solidchar = c end
+                            end
+                            return c
                         else node = node[n] end
                     end
                 else
@@ -439,6 +451,7 @@ for _ = 1, nStreams do
             if customcompress then
                 -- MARK: Huffman tree reconstruction
                 -- read bit lengths
+                --print(("%x"):format(pos+20))
                 --log.writeLine(("%x"):format(pos+20))
                 local bitlen = {}
                 if use5bit then
@@ -499,23 +512,70 @@ for _ = 1, nStreams do
             end
             if customcompress then
                 if tmppos == 7 then pos = pos - 1 end
-                --print(("%X"):format(pos+20))
-                local ok, colordata
-                colordata, pos = ("<s4"):unpack(data, pos)
-                ok, colordata = pcall(inflate, colordata)
-                if not ok then --[[log.close()]] error(colordata, 0) end
-                local cpos = 1
+                codetree = {}
+                -- MARK: Huffman tree reconstruction
+                -- read bit lengths
+                --print(("%x"):format(pos+20))
+                --log.writeLine(("%x"):format(pos+20))
+                local bitlen = {}
+                for j = 0, 11 do
+                    bitlen[j*2+1], bitlen[j*2+2] = {s = j*2, l = bit32.rshift(data:byte(pos+j), 4)}, {s = j*2+1, l = bit32.band(data:byte(pos+j), 0x0F)}
+                end
+                pos = pos + 12
+                do
+                    local j = 1
+                    while j <= #bitlen do
+                        if bitlen[j].l == 0 then table.remove(bitlen, j)
+                        else j = j + 1 end
+                    end
+                end
+                if #bitlen == 0 then
+                    -- screen is solid color
+                    solidchar = data:byte(pos)
+                    pos = pos + 1
+                    runlen = math.huge
+                else
+                    -- reconstruct codes from bit lengths
+                    table.sort(bitlen, function(a, b) if a.l == b.l then return a.s < b.s else return a.l < b.l end end)
+                    bitlen[1].c = 0
+                    for j = 2, #bitlen do bitlen[j].c = bit32.lshift(bitlen[j-1].c + 1, bitlen[j].l - bitlen[j-1].l) end
+                    -- create tree from codes
+                    for j = 1, #bitlen do
+                        local c = bitlen[j].c
+                        local node = codetree
+                        for k = bitlen[j].l - 1, 1, -1 do
+                            local n = bit32.extract(c, k, 1)
+                            if not node[n] then node[n] = {} end
+                            node = node[n]
+                            if type(node) == "number" then error(("Invalid tree state: position %X, frame %d, #bitlen = %d, current entry = %d"):format(pos, i, #bitlen, j)) end
+                        end
+                        local n = bit32.extract(c, 0, 1)
+                        node[n] = bitlen[j].s
+                    end
+                    -- read first byte
+                    tmp, tmppos, pos = data:byte(pos), 7, pos + 1
+                end
                 for y = 1, height do
                     local line = frame[y]
                     for x = 1, width do
-                        local c = colordata:byte(cpos)
-                        cpos = cpos + 1
-                        if line[4][x] then c = bit32.bor(bit32.band(bit32.lshift(c, 4), 0xF0), bit32.rshift(c, 4)) end
-                        line[2] = line[2] .. hexstr:sub(bit32.band(c, 15)+1, bit32.band(c, 15)+1)
-                        line[3] = line[3] .. hexstr:sub(bit32.rshift(c, 4)+1, bit32.rshift(c, 4)+1)
+                        local c = readField(true)
+                        line[2] = line[2] .. hexstr:sub(c+1, c+1)
                     end
-                    line[4] = nil
                 end
+                --print(runlen)
+                --assert(not runlen, runlen)
+                --while runlen do readField(true) end
+                runlen = nil
+                for y = 1, height do
+                    local line = frame[y]
+                    for x = 1, width do
+                        local c = readField(true)
+                        line[3] = line[3] .. hexstr:sub(c+1, c+1)
+                    end
+                end
+                --print(tmppos, runlen)
+                --assert(not runlen, runlen)
+                if tmppos == 7 then pos = pos - 1 end
             else
                 for y = 1, height do
                     local line = frame[y]
@@ -549,8 +609,9 @@ for _ = 1, nStreams do
             end
         elseif bit32.band(flags, 12) == 4 then
             local decode = dfpwm.make_decoder()
-            for i = 1, size / 6000 do
+            for i = 1, size / 48000 do
                 local data = file.read(math.min(size - (i-1)*6000, 6000))
+                if not data then break end
                 audio[i] = decode(data)
             end
         end

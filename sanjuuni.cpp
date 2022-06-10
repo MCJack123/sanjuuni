@@ -1320,10 +1320,106 @@ struct compare_node {bool operator()(tree_node *a, tree_node *b) {return *a < *b
 
 std::string make32vid_5bit_cmp(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
     std::string screen, col, pal;
-    tree_node nodes[32];
+    tree_node screen_nodes[32], color_nodes[24]; // color codes 16-23 = repeat last color 2^(n-15) times
     tree_node internal[31];
     tree_node * internal_next = internal;
-    for (int i = 0; i < width * height; i++) nodes[characters[i] & 0x1F].weight++;
+    uchar * fgcolors = new uchar[width*height];
+    uchar * bgcolors = new uchar[width*height];
+    uchar *fgnext = fgcolors, *bgnext = bgcolors;
+    uchar fc = 0, fn = 0, bc = 0, bn = 0;
+    bool fset = false, bset = false;
+    // add weights for Huffman coding
+    for (int i = 0; i < width * height; i++) {
+        screen_nodes[characters[i] & 0x1F].weight++;
+        // RLE encode colors
+        uchar fg = colors[i] & 0x0F, bg = colors[i] >> 4;
+        bool ok = true;
+        if (fn && (fg != fc || fn == 255)) {
+            if (!fset) {
+                *fgnext++ = fc;
+                color_nodes[fc].weight++;
+            }
+            if (fg == fc) {
+                *fgnext++ = 23; color_nodes[23].weight++;
+                ok = false;
+                fset = true;
+            } else {
+                fset = false;
+                if (--fn) {
+                    if (fn & 1) {*fgnext++ = fc; color_nodes[fc].weight++;}
+                    if (fn & 2) {*fgnext++ = 16; color_nodes[16].weight++;}
+                    if (fn & 4) {*fgnext++ = 17; color_nodes[17].weight++;}
+                    if (fn & 8) {*fgnext++ = 18; color_nodes[18].weight++;}
+                    if (fn & 16) {*fgnext++ = 19; color_nodes[19].weight++;}
+                    if (fn & 32) {*fgnext++ = 20; color_nodes[20].weight++;}
+                    if (fn & 64) {*fgnext++ = 21; color_nodes[21].weight++;}
+                    if (fn & 128) {*fgnext++ = 22; color_nodes[22].weight++;}
+                }
+            }
+            fn = 0;
+            fc = fg;
+        }
+        if (ok) fn++;
+        ok = true;
+        if (bn && (bg != bc || bn == 255)) {
+            if (!bset) {
+                *bgnext++ = bc;
+                color_nodes[bc].weight++;
+            }
+            if (bg == bc) {
+                *bgnext++ = 23; color_nodes[23].weight++;
+                ok = false;
+                bset = true;
+            } else {
+                bset = false;
+                if (--bn) {
+                    if (bn & 1) {*bgnext++ = bc; color_nodes[bc].weight++;}
+                    if (bn & 2) {*bgnext++ = 16; color_nodes[16].weight++;}
+                    if (bn & 4) {*bgnext++ = 17; color_nodes[17].weight++;}
+                    if (bn & 8) {*bgnext++ = 18; color_nodes[18].weight++;}
+                    if (bn & 16) {*bgnext++ = 19; color_nodes[19].weight++;}
+                    if (bn & 32) {*bgnext++ = 20; color_nodes[20].weight++;}
+                    if (bn & 64) {*bgnext++ = 21; color_nodes[21].weight++;}
+                    if (bn & 128) {*bgnext++ = 22; color_nodes[22].weight++;}
+                }
+            }
+            bn = 0;
+            bc = bg;
+        }
+        if (ok) bn++;
+    }
+    if (fn) {
+        if (!fset) {
+            *fgnext++ = fc;
+            color_nodes[fc].weight++;
+        }
+        if (--fn) {
+            if (fn & 1) {*fgnext++ = fc; color_nodes[fc].weight++;}
+            if (fn & 2) {*fgnext++ = 16; color_nodes[16].weight++;}
+            if (fn & 4) {*fgnext++ = 17; color_nodes[17].weight++;}
+            if (fn & 8) {*fgnext++ = 18; color_nodes[18].weight++;}
+            if (fn & 16) {*fgnext++ = 19; color_nodes[19].weight++;}
+            if (fn & 32) {*fgnext++ = 20; color_nodes[20].weight++;}
+            if (fn & 64) {*fgnext++ = 21; color_nodes[21].weight++;}
+            if (fn & 128) {*fgnext++ = 22; color_nodes[22].weight++;}
+        }
+    }
+    if (bn) {
+        if (!bset) {
+            *bgnext++ = bc;
+            color_nodes[bc].weight++;
+        }
+        if (--bn) {
+            if (bn & 1) {*bgnext++ = bc; color_nodes[bc].weight++;}
+            if (bn & 2) {*bgnext++ = 16; color_nodes[16].weight++;}
+            if (bn & 4) {*bgnext++ = 17; color_nodes[17].weight++;}
+            if (bn & 8) {*bgnext++ = 18; color_nodes[18].weight++;}
+            if (bn & 16) {*bgnext++ = 19; color_nodes[19].weight++;}
+            if (bn & 32) {*bgnext++ = 20; color_nodes[20].weight++;}
+            if (bn & 64) {*bgnext++ = 21; color_nodes[21].weight++;}
+            if (bn & 128) {*bgnext++ = 22; color_nodes[22].weight++;}
+        }
+    }
     for (int i = 0; i < 16; i++) {
         if (i < palette.size()) {
             pal += palette[i][2];
@@ -1331,11 +1427,13 @@ std::string make32vid_5bit_cmp(const uchar * characters, const uchar * colors, c
             pal += palette[i][0];
         } else pal += std::string((size_t)3, (char)0);
     }
+
+    // compress screen data
     // construct Huffman tree
     std::priority_queue<tree_node*, std::vector<tree_node*>, compare_node> queue;
     for (int i = 0; i < 32; i++) {
-        nodes[i].data = i;
-        if (nodes[i].weight) queue.push(&nodes[i]);
+        screen_nodes[i].data = i;
+        if (screen_nodes[i].weight) queue.push(&screen_nodes[i]);
     }
     if (queue.size() == 1) {
         // encode a full-screen pattern of the same thing
@@ -1377,12 +1475,68 @@ std::string make32vid_5bit_cmp(const uchar * characters, const uchar * colors, c
         }
         if (shift < 32) screen += (uint8_t)(tmp >> 24);
     }
-    uLongf destsz = compressBound(width * height);
-    uint8_t * buf = new uint8_t[destsz+2];
-    compress(buf + 2, &destsz, colors, width * height);
-    *(uint32_t*)buf = destsz - 2;
-    col = std::string((const char*)buf, destsz + 2);
-    delete[] buf;
+    
+    // compress color data
+    // construct Huffman tree
+    while (!queue.empty()) queue.pop();
+    internal_next = internal;
+    for (int i = 0; i < 24; i++) {
+        color_nodes[i].data = i;
+        if (color_nodes[i].weight) queue.push(&color_nodes[i]);
+    }
+    if (queue.size() == 1) {
+        // encode a full-screen pattern of the same thing (this will probably never happen)
+        col = std::string(12, '\0') + std::string(1, queue.top()->data);
+    } else {
+        while (queue.size() > 1) {
+            tree_node * parent = internal_next++;
+            parent->left = queue.top();
+            queue.pop();
+            parent->right = queue.top();
+            queue.pop();
+            parent->weight = parent->left->weight + parent->right->weight;
+            queue.push(parent);
+        }
+        // make canonical codebook
+        tree_node * root = queue.top();
+        huffman_code codebook[24];
+        std::vector<huffman_code*> codes;
+        loadCodes(root, codes, codebook, {0, 0, 0});
+        std::sort(codes.begin(), codes.end(), [](const huffman_code* a, const huffman_code* b)->bool {return a->bits == b->bits ? a->symbol < b->symbol : a->bits < b->bits;});
+        codes[0]->code = 0;
+        for (int i = 1; i < codes.size(); i++) {
+            if (codes[i]->bits > 15) throw std::logic_error("Too many bits!");
+            codes[i]->code = (codes[i-1]->code + 1) << (codes[i]->bits - codes[i-1]->bits);
+        }
+        // compress data
+        for (int i = 0; i < 24; i += 2) col += codebook[i].bits << 4 | codebook[i+1].bits;
+        uint32_t tmp = 0;
+        int shift = 32;
+        for (uchar * i = fgcolors; i < fgnext; i++) {
+            huffman_code& code = codebook[*i];
+            tmp |= code.code << (shift - code.bits);
+            shift -= code.bits;
+            while (shift <= 24) {
+                col += (uint8_t)(tmp >> 24);
+                tmp <<= 8;
+                shift += 8;
+            }
+        }
+        for (uchar * i = bgcolors; i < bgnext; i++) {
+            huffman_code& code = codebook[*i];
+            tmp |= code.code << (shift - code.bits);
+            shift -= code.bits;
+            while (shift <= 24) {
+                col += (uint8_t)(tmp >> 24);
+                tmp <<= 8;
+                shift += 8;
+            }
+        }
+        if (shift < 32) col += (uint8_t)(tmp >> 24);
+    }
+
+    delete[] fgcolors;
+    delete[] bgcolors;
     //std::cout << screen.size() << "/" << col.size() << "\n";
     return screen + col + pal;
 }
@@ -1427,7 +1581,7 @@ std::string make32vid_6bit(const uchar * characters, const uchar * colors, const
 
 std::string make32vid_6bit_cmp(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
     std::string screen, col, pal;
-    tree_node nodes[64];
+    tree_node screen_nodes[64];
     tree_node internal[63];
     tree_node * internal_next = internal;
     uchar lastColor = 0;
@@ -1441,7 +1595,7 @@ std::string make32vid_6bit_cmp(const uchar * characters, const uchar * colors, c
         }
         lastColor = c;
         newcolors[i] = c;
-        nodes[tok].weight++;
+        screen_nodes[tok].weight++;
     }
     for (int i = 0; i < 16; i++) {
         if (i < palette.size()) {
@@ -1453,8 +1607,8 @@ std::string make32vid_6bit_cmp(const uchar * characters, const uchar * colors, c
     // construct Huffman tree
     std::priority_queue<tree_node*, std::vector<tree_node*>, compare_node> queue;
     for (int i = 0; i < 64; i++) {
-        nodes[i].data = i;
-        if (nodes[i].weight) queue.push(&nodes[i]);
+        screen_nodes[i].data = i;
+        if (screen_nodes[i].weight) queue.push(&screen_nodes[i]);
     }
     if (queue.size() == 1) {
         // encode a full-screen pattern of the same thing
@@ -1920,6 +2074,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("5bit", "5", "Use 5-bit codes in 32vid (internal testing)"));
     options.addOption(Option("compression", "c", "Compression type for 32vid videos", false, "none|lzw|deflate|custom", true).validator(new RegExpValidator("^(none|lzw|deflate|custom)$")));
     options.addOption(Option("compression-level", "L", "Compression level for 32vid videos when using DEFLATE", false, "1-9", true).validator(new IntValidator(1, 9)));
+    options.addOption(Option("dfpwm", "d", "Use DFPWM compression on audio"));
     options.addOption(Option("width", "W", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("height", "H", "Resize the image to the specified height", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("help", "h", "Show this help"));
@@ -1927,7 +2082,7 @@ int main(int argc, const char * argv[]) {
     argparse.setUnixStyle(true);
 
     std::string input, output, subtitle;
-    bool useDefaultPalette = false, noDither = false, useOctree = false, use5bit = false, useKmeans = false;
+    bool useDefaultPalette = false, noDither = false, useOctree = false, use5bit = false, useKmeans = false, useDFPWM = false;
     OutputType mode = OutputType::Default;
     int compression = VID32_FLAG_VIDEO_COMPRESSION_DEFLATE;
     int port = 80, width = -1, height = -1, zlibCompression = 5;
@@ -1957,6 +2112,7 @@ int main(int argc, const char * argv[]) {
                     else if (arg == "deflate") compression = VID32_FLAG_VIDEO_COMPRESSION_DEFLATE;
                     else if (arg == "custom") compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
                 } else if (option == "compression-level") zlibCompression = std::stoi(arg);
+                else if (option == "dfpwm") useDFPWM = true;
                 else if (option == "width") width = std::stoi(arg);
                 else if (option == "height") height = std::stoi(arg);
                 else if (option == "help") throw HelpException();
@@ -1974,6 +2130,13 @@ int main(int argc, const char * argv[]) {
         help.setFooter("sanjuuni is licensed under the GPL license. Get the source at https://github.com/MCJack123/sanjuuni.");
         help.format(e.className() == "HelpException" ? std::cout : std::cerr);
         return 0;
+    }
+
+    if (useDFPWM) {
+        if (avcodec_version() < AV_VERSION_INT(59, 22, 0) || avformat_version() < AV_VERSION_INT(59, 18, 0)) {
+            std::cerr << "DFPWM output requires FFmpeg 5.1 or later\n";
+            return 2;
+        }
     }
 
     AVFormatContext * format_ctx = NULL;
@@ -2201,7 +2364,7 @@ int main(int argc, const char * argv[]) {
                     outstream.flush();
                     break;
                 } case OutputType::Vid32: {
-                    std::cout << std::hex << (videoStream.size() + 0x15) << std::endl;
+                    //std::cout << std::hex << (videoStream.size() + 0x15) << std::endl;
                     if (use5bit) {
                         if (compression == VID32_FLAG_VIDEO_COMPRESSION_CUSTOM) videoStream += make32vid_5bit_cmp(characters, colors, palette, pimg.width / 2, pimg.height / 3);
                         else videoStream += make32vid_5bit(characters, colors, palette, pimg.width / 2, pimg.height / 3);
@@ -2275,6 +2438,7 @@ int main(int argc, const char * argv[]) {
         header.nstreams = 2;
         header.flags = compression;
         if (use5bit) header.flags |= VID32_FLAG_VIDEO_5BIT_CODES;
+        if (useDFPWM) header.flags |= VID32_FLAG_AUDIO_COMPRESSION_DFPWM;
 
         outfile.write((char*)&header, 12);
         if (compression == VID32_FLAG_VIDEO_COMPRESSION_DEFLATE) {
@@ -2301,7 +2465,71 @@ int main(int argc, const char * argv[]) {
         }
         if (audioStorage) {
             outfile.write((char*)&audioChunk, 9);
-            outfile.write((char*)audioStorage, audioStorageSize);
+            if (useDFPWM) {
+                const AVCodec * dfpwm_codec;
+                AVCodecContext * dfpwm_codec_ctx;
+                if (!(dfpwm_codec = avcodec_find_encoder(AV_CODEC_ID_DFPWM))) {
+                    std::cerr << "Could not find DFPWM codec\n";
+                    goto cleanup;
+                }
+                if (!(dfpwm_codec_ctx = avcodec_alloc_context3(dfpwm_codec))) {
+                    std::cerr << "Could not allocate DFPWM codec context\n";
+                    goto cleanup;
+                }
+                dfpwm_codec_ctx->sample_fmt = AV_SAMPLE_FMT_U8;
+                dfpwm_codec_ctx->sample_rate = 48000;
+                dfpwm_codec_ctx->channels = 1;
+                dfpwm_codec_ctx->channel_layout = AV_CH_LAYOUT_MONO;
+                if ((error = avcodec_open2(dfpwm_codec_ctx, dfpwm_codec, NULL)) < 0) {
+                    std::cerr << "Could not open DFPWM codec: " << avErrorString(error) << "\n";
+                    avcodec_free_context(&dfpwm_codec_ctx);
+                    goto cleanup;
+                }
+                AVPacket * dfpwm_pkt = av_packet_alloc();
+                AVFrame * dfpwm_frame = av_frame_alloc();
+                frame->nb_samples = audioStorageSize;
+                frame->format = AV_SAMPLE_FMT_U8;
+                frame->channel_layout = AV_CH_LAYOUT_MONO;
+                frame->channels = 1;
+                if ((error = av_frame_get_buffer(frame, 0)) < 0) {
+                    std::cerr << "Could not allocate DFPWM frame: " << avErrorString(error) << "\n";
+                    av_frame_free(&dfpwm_frame);
+                    av_packet_free(&dfpwm_pkt);
+                    avcodec_free_context(&dfpwm_codec_ctx);
+                    goto cleanup;
+                }
+                if ((error = av_frame_make_writable(frame)) < 0) {
+                    std::cerr << "Could not make DFPWM frame writable: " << avErrorString(error) << "\n";
+                    av_frame_free(&dfpwm_frame);
+                    av_packet_free(&dfpwm_pkt);
+                    avcodec_free_context(&dfpwm_codec_ctx);
+                    goto cleanup;
+                }
+                memcpy(frame->data[0], audioStorage, audioStorageSize);
+                if ((error = avcodec_send_frame(dfpwm_codec_ctx, frame)) < 0) {
+                    std::cerr << "Could not write DFPWM frame: " << avErrorString(error) << "\n";
+                    av_frame_free(&dfpwm_frame);
+                    av_packet_free(&dfpwm_pkt);
+                    avcodec_free_context(&dfpwm_codec_ctx);
+                    goto cleanup;
+                }
+                while (error >= 0) {
+                    error = avcodec_receive_packet(dfpwm_codec_ctx, dfpwm_pkt);
+                    if (error == AVERROR(EAGAIN) || error == AVERROR_EOF) break;
+                    else if (error < 0) {
+                        std::cerr << "Could not read DFPWM frame: " << avErrorString(error) << "\n";
+                        av_frame_free(&dfpwm_frame);
+                        av_packet_free(&dfpwm_pkt);
+                        avcodec_free_context(&dfpwm_codec_ctx);
+                        goto cleanup;
+                    }
+                    outfile.write((const char*)dfpwm_pkt->data, dfpwm_pkt->size);
+                    av_packet_unref(dfpwm_pkt);
+                }
+                av_frame_free(&dfpwm_frame);
+                av_packet_free(&dfpwm_pkt);
+                avcodec_free_context(&dfpwm_codec_ctx);
+            } else outfile.write((char*)audioStorage, audioStorageSize);
         }
     } else if (mode == OutputType::BlitImage) {
         char timestr[26];

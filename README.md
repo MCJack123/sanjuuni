@@ -101,6 +101,13 @@ Pixels are grouped in tokens of 5 bytes/8 characters in 5-bit mode, and 3 bytes/
 
 The length of a frame can be determined with the formula `ceil(width * height / 8) * 5 + width * height` in 5-bit mode, or `ceil(width * height / 4) * 3 + width * height` in 6-bit mode.
 
+#### Custom video compression
+32vid implements a custom compression format for faster and more efficient compression. When custom compression is enabled, each frame is stored as a pair of screen and color blocks, each encoded using Huffman coding. The screen block uses 32 symbols corresponding to the 5-bit drawing characters, and the color block uses 24 symbols, with the low 16 representing the 16 colors, and the last 8 representing repeats of the last literal value from 2 to 256. (For example, a sequence of 8, 18, 19 means to repeat color 8 25 times.)
+
+The code tree is encoded using canonical Huffman codes, with 4 bits per symbol for the length of the code. Therefore, the screen block's table is 16 bytes in size, and the color block's table is 12 bytes. Decoding is accomplished by reading the table, constructing a tree from the canonical bit lengths, and then reading the bits in order from most significant bit to least.
+
+Unlike uncompressed frames, the color block is stored in two sections: the foreground colors are coded first, and then the background colors. This is to allow better run-length encoding.
+
 #### Subtitle events
 | Offset | Bytes | Description                          |
 |--------|-------|--------------------------------------|
