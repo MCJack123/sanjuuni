@@ -133,7 +133,7 @@ static void kMeans_recenter(void* s) {
     (*state->newColors)[state->i].second.clear();
 }
 
-std::vector<Vec3b> kMeans(const Mat& image, int numColors) {
+std::vector<Vec3b> reducePalette_kMeans(const Mat& image, int numColors) {
     Vec3d * originalColors = new Vec3d[image.width * image.height];
     std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> colorsA, colorsB;
     std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> *colors = &colorsA, *newColors = &colorsB;

@@ -76,6 +76,7 @@ static long audioStorageSize = 0, totalFrames = 0;
 static std::mutex exitLock, streamedLock;
 static std::condition_variable exitNotify, streamedNotify;
 static bool streamed = false;
+static bool useDFPWM = false;
 static const std::vector<Vec3b> defaultPalette = {
     {0xf0, 0xf0, 0xf0},
     {0xf2, 0xb2, 0x33},
@@ -188,6 +189,7 @@ public:
             response.send().write(frameStorage[frame].c_str(), frameStorage[frame].size());
         } else if (path.substr(0, 7) == "/audio/") {
             int frame;
+            long size = useDFPWM ? 6000 : 48000;
             try {
                 frame = std::stoi(path.substr(7));
             } catch (std::exception &e) {
@@ -196,7 +198,8 @@ public:
                 response.send().write("Invalid path", 12);
                 return;
             }
-            if (frame < 0 || frame > audioStorageSize / 48000) {
+            if (useDFPWM) frame *= 8;
+            if (frame < 0 || frame > audioStorageSize / size) {
                 response.setStatusAndReason(HTTPResponse::HTTP_NOT_FOUND);
                 response.setContentType("text/plain");
                 response.send().write("404 Not Found", 13);
@@ -204,7 +207,7 @@ public:
             }
             response.setStatusAndReason(HTTPResponse::HTTP_OK);
             response.setContentType("application/octet-stream");
-            response.send().write((char*)(audioStorage + frame * 48000), frame == audioStorageSize / 48000 ? audioStorageSize % 48000 : 48000);
+            response.send().write((char*)(audioStorage + frame * size), frame == audioStorageSize / size ? audioStorageSize % size : size);
         } else {
             response.setStatusAndReason(HTTPResponse::HTTP_NOT_FOUND);
             response.setContentType("text/plain");
@@ -242,18 +245,19 @@ static void serveWebSocket(WebSocket * ws, double * fps) {
                     ws->sendFrame(frameStorage[frame].c_str() + i, min(frameStorage[frame].size() - i, (size_t)65535), WebSocket::FRAME_BINARY);
                 if (streamed) frameStorage[frame] = "";
             } else if (buf[0] == 'a') {
-                int offset = std::stoi(std::string(buf + 1, n - 1));
+                int offset = std::stoi(std::string(buf + 1, n - 1)) / (useDFPWM ? 8 : 1);
+                long size = useDFPWM ? 6000 : 48000;
                 if (streamed) {
-                    if (audioStorageSize < 48000) {
-                        audioStorage = (uint8_t*)realloc(audioStorage, 48000);
-                        memset(audioStorage + max(audioStorageSize, 0L), 0, 48000 - max(audioStorageSize, 0L));
+                    if (audioStorageSize < size) {
+                        audioStorage = (uint8_t*)realloc(audioStorage, size);
+                        memset(audioStorage + max(audioStorageSize, 0L), 0, size - max(audioStorageSize, 0L));
                     }
-                    if (audioStorageSize > -48000) ws->sendFrame(audioStorageSize < 0 ? audioStorage - audioStorageSize : audioStorage, 48000, WebSocket::FRAME_BINARY);
-                    if (audioStorageSize > 48000) memmove(audioStorage, audioStorage + 48000, audioStorageSize - 48000);
-                    audioStorageSize -= 48000;
+                    if (audioStorageSize > -size) ws->sendFrame(audioStorageSize < 0 ? audioStorage - audioStorageSize : audioStorage, size, WebSocket::FRAME_BINARY);
+                    if (audioStorageSize > size) memmove(audioStorage, audioStorage + size, audioStorageSize - size);
+                    audioStorageSize -= size;
                 }
                 else if (offset >= audioStorageSize || offset < 0) ws->sendFrame("!", 1, WebSocket::FRAME_TEXT);
-                else ws->sendFrame(audioStorage + offset, offset + 48000 > audioStorageSize ? audioStorageSize - offset : 48000, WebSocket::FRAME_BINARY);
+                else ws->sendFrame(audioStorage + offset, offset + size > audioStorageSize ? audioStorageSize - offset : size, WebSocket::FRAME_BINARY);
             } else if (buf[0] == 'n') {
                 std::string data = std::to_string(streamed ? totalFrames : frameStorage.size());
                 ws->sendFrame(data.c_str(), data.size(), WebSocket::FRAME_TEXT);
@@ -442,7 +446,7 @@ int main(int argc, const char * argv[]) {
     argparse.setUnixStyle(true);
 
     std::string input, output, subtitle;
-    bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, useDFPWM = false;
+    bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false;
     OutputType mode = OutputType::Default;
     int compression = VID32_FLAG_VIDEO_COMPRESSION_DEFLATE;
     int port = 80, width = -1, height = -1, zlibCompression = 5;
@@ -499,8 +503,8 @@ int main(int argc, const char * argv[]) {
     }
 
     AVFormatContext * format_ctx = NULL;
-    AVCodecContext * video_codec_ctx = NULL, * audio_codec_ctx = NULL;
-    const AVCodec * video_codec = NULL, * audio_codec = NULL;
+    AVCodecContext * video_codec_ctx = NULL, * audio_codec_ctx = NULL, * dfpwm_codec_ctx = NULL;
+    const AVCodec * video_codec = NULL, * audio_codec = NULL, * dfpwm_codec = NULL;
     SwsContext * resize_ctx = NULL;
     SwrContext * resample_ctx = NULL;
     int error, video_stream = -1, audio_stream = -1;
@@ -578,8 +582,37 @@ int main(int argc, const char * argv[]) {
             return error;
         }
     }
+    // Open DFPWM encoder if required
+    if (useDFPWM) {
+        if (!(dfpwm_codec = avcodec_find_encoder(AV_CODEC_ID_DFPWM))) {
+            std::cerr << "Could not find DFPWM codec\n";
+            avcodec_free_context(&audio_codec_ctx);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return error;
+        }
+        if (!(dfpwm_codec_ctx = avcodec_alloc_context3(dfpwm_codec))) {
+            std::cerr << "Could not allocate DFPWM codec context\n";
+            avcodec_free_context(&audio_codec_ctx);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return error;
+        }
+        dfpwm_codec_ctx->sample_fmt = AV_SAMPLE_FMT_U8;
+        dfpwm_codec_ctx->sample_rate = 48000;
+        dfpwm_codec_ctx->channels = 1;
+        dfpwm_codec_ctx->channel_layout = AV_CH_LAYOUT_MONO;
+        if ((error = avcodec_open2(dfpwm_codec_ctx, dfpwm_codec, NULL)) < 0) {
+            std::cerr << "Could not open DFPWM codec: " << avErrorString(error) << "\n";
+            avcodec_free_context(&dfpwm_codec_ctx);
+            avcodec_free_context(&audio_codec_ctx);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return error;
+        }
+    }
     // Initialize packets/frames
-    AVPacket * packet = av_packet_alloc();
+    AVPacket * packet = av_packet_alloc(), * dfpwm_packet = useDFPWM ? av_packet_alloc() : NULL;
     AVFrame * frame = av_frame_alloc();
 
     std::ofstream outfile;
@@ -764,12 +797,35 @@ int main(int argc, const char * argv[]) {
                     std::cerr << "Failed to convert audio: " << avErrorString(error) << "\n";
                     continue;
                 }
-                if (audioStorageSize + newframe->nb_samples > 0) {
-                    unsigned offset = audioStorageSize < 0 ? -audioStorageSize : 0;
-                    audioStorage = (uint8_t*)realloc(audioStorage, audioStorageSize + newframe->nb_samples);
-                    memcpy(audioStorage + audioStorageSize + offset, newframe->data[0] + offset, newframe->nb_samples - offset);
+                if (useDFPWM) {
+                    if ((error = avcodec_send_frame(dfpwm_codec_ctx, newframe)) < 0) {
+                        std::cerr << "Could not write DFPWM frame: " << avErrorString(error) << "\n";
+                        av_frame_free(&newframe);
+                        continue;
+                    }
+                    while (error >= 0) {
+                        error = avcodec_receive_packet(dfpwm_codec_ctx, dfpwm_packet);
+                        if (error == AVERROR(EAGAIN) || error == AVERROR_EOF) break;
+                        else if (error < 0) {
+                            std::cerr << "Could not read DFPWM frame: " << avErrorString(error) << "\n";
+                            break;
+                        }
+                        if (audioStorageSize + dfpwm_packet->size > 0) {
+                            unsigned offset = audioStorageSize < 0 ? -audioStorageSize : 0;
+                            audioStorage = (uint8_t*)realloc(audioStorage, audioStorageSize + dfpwm_packet->size);
+                            memcpy(audioStorage + audioStorageSize + offset, dfpwm_packet->data + offset, dfpwm_packet->size - offset);
+                        }
+                        audioStorageSize += dfpwm_packet->size;
+                        av_packet_unref(dfpwm_packet);
+                    }
+                } else {
+                    if (audioStorageSize + newframe->nb_samples > 0) {
+                        unsigned offset = audioStorageSize < 0 ? -audioStorageSize : 0;
+                        audioStorage = (uint8_t*)realloc(audioStorage, audioStorageSize + newframe->nb_samples);
+                        memcpy(audioStorage + audioStorageSize + offset, newframe->data[0] + offset, newframe->nb_samples - offset);
+                    }
+                    audioStorageSize += newframe->nb_samples;
                 }
-                audioStorageSize += newframe->nb_samples;
                 av_frame_free(&newframe);
             }
             if (error != AVERROR_EOF && error != AVERROR(EAGAIN)) {
@@ -818,76 +874,9 @@ int main(int argc, const char * argv[]) {
             outfile.write(videoStream.c_str(), videoStream.size());
         }
         if (audioStorage) {
-            if (useDFPWM) {
-                audioChunk.size = audioChunk.size / 8 + (audioChunk.size % 8 ? 1 : 0);
-                outfile.write((char*)&audioChunk, 9);
-                const AVCodec * dfpwm_codec;
-                AVCodecContext * dfpwm_codec_ctx;
-                if (!(dfpwm_codec = avcodec_find_encoder(AV_CODEC_ID_DFPWM))) {
-                    std::cerr << "Could not find DFPWM codec\n";
-                    goto cleanup;
-                }
-                if (!(dfpwm_codec_ctx = avcodec_alloc_context3(dfpwm_codec))) {
-                    std::cerr << "Could not allocate DFPWM codec context\n";
-                    goto cleanup;
-                }
-                dfpwm_codec_ctx->sample_fmt = AV_SAMPLE_FMT_U8;
-                dfpwm_codec_ctx->sample_rate = 48000;
-                dfpwm_codec_ctx->channels = 1;
-                dfpwm_codec_ctx->channel_layout = AV_CH_LAYOUT_MONO;
-                if ((error = avcodec_open2(dfpwm_codec_ctx, dfpwm_codec, NULL)) < 0) {
-                    std::cerr << "Could not open DFPWM codec: " << avErrorString(error) << "\n";
-                    avcodec_free_context(&dfpwm_codec_ctx);
-                    goto cleanup;
-                }
-                AVPacket * dfpwm_pkt = av_packet_alloc();
-                AVFrame * dfpwm_frame = av_frame_alloc();
-                frame->nb_samples = audioStorageSize;
-                frame->format = AV_SAMPLE_FMT_U8;
-                frame->channel_layout = AV_CH_LAYOUT_MONO;
-                frame->channels = 1;
-                if ((error = av_frame_get_buffer(frame, 0)) < 0) {
-                    std::cerr << "Could not allocate DFPWM frame: " << avErrorString(error) << "\n";
-                    av_frame_free(&dfpwm_frame);
-                    av_packet_free(&dfpwm_pkt);
-                    avcodec_free_context(&dfpwm_codec_ctx);
-                    goto cleanup;
-                }
-                if ((error = av_frame_make_writable(frame)) < 0) {
-                    std::cerr << "Could not make DFPWM frame writable: " << avErrorString(error) << "\n";
-                    av_frame_free(&dfpwm_frame);
-                    av_packet_free(&dfpwm_pkt);
-                    avcodec_free_context(&dfpwm_codec_ctx);
-                    goto cleanup;
-                }
-                memcpy(frame->data[0], audioStorage, audioStorageSize);
-                if ((error = avcodec_send_frame(dfpwm_codec_ctx, frame)) < 0) {
-                    std::cerr << "Could not write DFPWM frame: " << avErrorString(error) << "\n";
-                    av_frame_free(&dfpwm_frame);
-                    av_packet_free(&dfpwm_pkt);
-                    avcodec_free_context(&dfpwm_codec_ctx);
-                    goto cleanup;
-                }
-                while (error >= 0) {
-                    error = avcodec_receive_packet(dfpwm_codec_ctx, dfpwm_pkt);
-                    if (error == AVERROR(EAGAIN) || error == AVERROR_EOF) break;
-                    else if (error < 0) {
-                        std::cerr << "Could not read DFPWM frame: " << avErrorString(error) << "\n";
-                        av_frame_free(&dfpwm_frame);
-                        av_packet_free(&dfpwm_pkt);
-                        avcodec_free_context(&dfpwm_codec_ctx);
-                        goto cleanup;
-                    }
-                    outfile.write((const char*)dfpwm_pkt->data, dfpwm_pkt->size);
-                    av_packet_unref(dfpwm_pkt);
-                }
-                av_frame_free(&dfpwm_frame);
-                av_packet_free(&dfpwm_pkt);
-                avcodec_free_context(&dfpwm_codec_ctx);
-            } else {
-                outfile.write((char*)&audioChunk, 9);
-                outfile.write((char*)audioStorage, audioStorageSize);
-            }
+            if (useDFPWM) audioChunk.nframes *= 8;
+            outfile.write((char*)&audioChunk, 9);
+            outfile.write((char*)audioStorage, audioStorageSize);
         }
         if (!vid32subs.empty()) {
             Vid32Chunk subtitleChunk;
@@ -916,8 +905,10 @@ cleanup:
     if (resample_ctx) swr_free(&resample_ctx);
     av_frame_free(&frame);
     av_packet_free(&packet);
+    if (dfpwm_packet) av_packet_free(&dfpwm_packet);
     avcodec_free_context(&video_codec_ctx);
     if (audio_codec_ctx) avcodec_free_context(&audio_codec_ctx);
+    if (dfpwm_codec_ctx) avcodec_free_context(&dfpwm_codec_ctx);
     avformat_close_input(&format_ctx);
     if (ws) {
         if (!streamed) {
