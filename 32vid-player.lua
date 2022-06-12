@@ -396,8 +396,6 @@ if not file then error(err) end
 if file.read(4) ~= "32VD" then file.close() error("Not a 32vid file") end
 local width, height, fps, nStreams, flags = ("<HHBBH"):unpack(file.read(8))
 local video, audio, subtitles
---local log = fs.open("32vid-log.txt", "w")
-print(nStreams)
 for _ = 1, nStreams do
     local size, nFrames, frameType = ("<IIB"):unpack(file.read(9))
     print(("%X"):format(file.seek()), size, nFrames, frameType)
@@ -408,11 +406,10 @@ for _ = 1, nStreams do
         local pos = 1
         local start = os.epoch "utc"
         for i = 1, nFrames do
-            if i % 100 == 0 or i >= nFrames - 10 then print(i, os.epoch "utc" - start) start = os.epoch "utc" sleep(0) --[[log.flush()]] end
+            if i % 100 == 0 or i >= nFrames - 10 then print(i, os.epoch "utc" - start) start = os.epoch "utc" sleep(0) end
             local frame = {palette = {}}
             local tmp, tmppos = 0, 0
             local use5bit, customcompress = bit32.btest(flags, 16), bit32.band(flags, 3) == 3
-            local bits, bytes, len, unpack = use5bit and 5 or 6, use5bit and 5 or 3, use5bit and 7 or 3, use5bit and ">I5" or ">I3"
             local codetree = {}
             local solidchar, runlen
             local function readField(isColor)
@@ -442,18 +439,16 @@ for _ = 1, nStreams do
                     end
                 else
                     local n
-                    if tmppos * bits + bits > 32 then n = bit32.extract(math.floor(tmp / 0x1000000), tmppos * bits - 24, bits)
-                    else n = bit32.extract(tmp, tmppos * bits, bits) end
+                    if tmppos * 5 + 5 > 32 then n = bit32.extract(math.floor(tmp / 0x1000000), tmppos * 5 - 24, 5)
+                    else n = bit32.extract(tmp, tmppos * 5, 5) end
                     tmppos = tmppos - 1
-                    if tmppos < 0 then tmp, pos = unpack:unpack(data, pos) tmppos = len end
+                    if tmppos < 0 then tmp, pos = unpack:unpack(data, pos) tmppos = 7 end
                     return n
                 end
             end
             if customcompress then
                 -- MARK: Huffman tree reconstruction
                 -- read bit lengths
-                --print(("%x"):format(pos+20))
-                --log.writeLine(("%x"):format(pos+20))
                 local bitlen = {}
                 if use5bit then
                     for j = 0, 15 do
@@ -504,7 +499,7 @@ for _ = 1, nStreams do
             for y = 1, height do
                 local line = {"", "", "", {}}
                 for x = 1, width do
-                    if pos + bytes + 1 >= #data then print(i, pos, x, y) error() end
+                    if pos + 5 + 1 >= #data then print(i, pos, x, y) error() end
                     local n = readField()
                     line[1] = line[1] .. string.char(128 + (n % 0x20))
                     line[4][x] = bit32.btest(n, 0x20)
@@ -516,8 +511,6 @@ for _ = 1, nStreams do
                 codetree = {}
                 -- MARK: Huffman tree reconstruction
                 -- read bit lengths
-                --print(("%x"):format(pos+20))
-                --log.writeLine(("%x"):format(pos+20))
                 local bitlen = {}
                 for j = 0, 11 do
                     bitlen[j*2+1], bitlen[j*2+2] = {s = j*2, l = bit32.rshift(data:byte(pos+j), 4)}, {s = j*2+1, l = bit32.band(data:byte(pos+j), 0x0F)}
@@ -563,9 +556,6 @@ for _ = 1, nStreams do
                         line[2] = line[2] .. hexstr:sub(c+1, c+1)
                     end
                 end
-                --print(runlen)
-                --assert(not runlen, runlen)
-                --while runlen do readField(true) end
                 runlen = nil
                 for y = 1, height do
                     local line = frame[y]
@@ -574,8 +564,6 @@ for _ = 1, nStreams do
                         line[3] = line[3] .. hexstr:sub(c+1, c+1)
                     end
                 end
-                --print(tmppos, runlen)
-                --assert(not runlen, runlen)
                 if tmppos == 7 then pos = pos - 1 end
             else
                 for y = 1, height do

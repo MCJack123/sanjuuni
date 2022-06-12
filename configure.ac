@@ -1,5 +1,5 @@
 AC_INIT([sanjuuni], [1.0])
-AC_CONFIG_SRCDIR([sanjuuni.cpp])
+AC_CONFIG_SRCDIR([src/sanjuuni.cpp])
 m4_include([m4/find_cxx.m4])
 m4_include([m4/find_cxx11.m4])
 
@@ -31,7 +31,7 @@ AX_CXX_CHECK_LIB(PocoFoundation, [Poco::ASCIIEncoding], [], [AC_MSG_ERROR([Could
 AX_CXX_CHECK_LIB(PocoUtil, [Poco::Util::Timer], [], [AC_MSG_ERROR([Could not find Poco Util library.])])
 AX_CXX_CHECK_LIB(PocoNet, [Poco::Net::HTTPRequest], [], [AC_MSG_ERROR([Could not find Poco Net library.])])
 AX_CXX_CHECK_LIB(PocoNetSSL, [Poco::Net::HTTPSClientSession], [], [AC_MSG_ERROR([Could not find Poco NetSSL library.])])
-AX_CXX_CHECK_LIB(PocoCrypto, [Poco::Crypto::X509Certificate], [], [AC_MSG_ERROR([Could not find Poco Crypto library.])])
+AX_CXX_CHECK_LIB(PocoCrypto, [Poco::Crypto::Cipher], [], [AC_MSG_ERROR([Could not find Poco Crypto library.])])
 
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT

@@ -12,3 +12,5 @@ x86
 x64
 ARM64
 vcpkg_installed
+*.32v
+obj

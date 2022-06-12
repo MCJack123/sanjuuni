@@ -3,9 +3,24 @@ CPPFLAGS=@CPPFLAGS@
 CXXFLAGS=@CFLAGS@ @CXXFLAGS@
 LDFLAGS=@LDFLAGS@
 LIBS=@LIBS@
+SDIR=@srcdir@/src
+ODIR=obj
+_OBJ=cc-pixel.o generator.o octree.o quantize.o sanjuuni.o
+OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 
-sanjuuni: sanjuuni.cpp
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+all: $(ODIR) sanjuuni
+
+$(ODIR):
+	mkdir $@
+
+sanjuuni: $(OBJ)
+	$(CXX) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+$(ODIR)/%.o: $(SDIR)/%.cpp $(SDIR)/sanjuuni.hpp
+	$(CXX) -o $@ -c $(CPPFLAGS) $(CXXFLAGS) $<
 
 clean:
+	rm $(ODIR)/*
 	rm sanjuuni
+
+rebuild: clean sanjuuni
