@@ -1890,6 +1890,8 @@ struct Vid32SubtitleEvent {
 struct ASSSubtitleEvent {
     unsigned width;
     unsigned height;
+    unsigned startFrame;
+    unsigned length;
     uint8_t alignment;
     int marginLeft;
     int marginRight;
@@ -1966,6 +1968,8 @@ std::unordered_multimap<int, ASSSubtitleEvent> parseASSSubtitles(const std::stri
                 ASSSubtitleEvent event;
                 event.width = width;
                 event.height = height;
+                event.startFrame = start;
+                event.length = end - start;
                 event.alignment = std::stoi(style["Alignment"]);
                 if (!isASS) {
                     switch (event.alignment) {
@@ -1987,7 +1991,7 @@ std::unordered_multimap<int, ASSSubtitleEvent> parseASSSubtitles(const std::stri
     return retval;
 }
 
-void renderSubtitles(const std::unordered_multimap<int, ASSSubtitleEvent>& subtitles, int nframe, uchar * characters, uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
+void renderSubtitles(const std::unordered_multimap<int, ASSSubtitleEvent>& subtitles, int nframe, uchar * characters, uchar * colors, const std::vector<Vec3b>& palette, int width, int height, std::vector<Vid32SubtitleEvent*> * vid32subs = NULL) {
     auto range = subtitles.equal_range(nframe);
     for (auto it = range.first; it != range.second; it++) {
         double scaleX = (double)it->second.width / (double)width, scaleY = (double)it->second.height / (double)height;
@@ -2018,10 +2022,25 @@ void renderSubtitles(const std::unordered_multimap<int, ASSSubtitleEvent>& subti
                 case 8: startX = width / 2 - lines[i].size(); startY = (height - lines.size()) / 2 + i*3; break;
                 case 9: startX = width - ((double)it->second.marginRight / scaleX) - lines[i].size() - 1; startY = (height - lines.size()) / 2 + i*3; break;
             }
-            int start = (startY / 3) * (width / 2) + (startX / 2);
-            for (int x = 0; x < lines[i].size(); x++) {
-                characters[start+x] = lines[i][x];
-                colors[start+x] = 0xF0 | color;
+            if (vid32subs != NULL) {
+                if (it->second.startFrame == nframe) {
+                    Vid32SubtitleEvent * ev = (Vid32SubtitleEvent*)malloc(sizeof(Vid32SubtitleEvent) + lines[i].size());
+                    ev->start = nframe;
+                    ev->length = it->second.length;
+                    ev->x = startX / 2;
+                    ev->y = startY / 3;
+                    ev->colors = 0xF0 | color;
+                    ev->flags = 0;
+                    ev->size = lines[i].size();
+                    memcpy(ev->text, lines[i].c_str(), lines[i].size());
+                    vid32subs->push_back(ev);
+                }
+            } else {
+                int start = (startY / 3) * (width / 2) + (startX / 2);
+                for (int x = 0; x < lines[i].size(); x++) {
+                    characters[start+x] = lines[i][x];
+                    colors[start+x] = 0xF0 | color;
+                }
             }
         }
     }
@@ -2240,6 +2259,7 @@ int main(int argc, const char * argv[]) {
     HTTPServer * srv = NULL;
     WebSocket* ws = NULL;
     std::string videoStream;
+    std::vector<Vid32SubtitleEvent*> vid32subs;
     double fps = 0;
     int nframe = 0;
     auto start = std::chrono::system_clock::now();
@@ -2369,9 +2389,10 @@ int main(int argc, const char * argv[]) {
                         if (compression == VID32_FLAG_VIDEO_COMPRESSION_CUSTOM) videoStream += make32vid_5bit_cmp(characters, colors, palette, pimg.width / 2, pimg.height / 3);
                         else videoStream += make32vid_5bit(characters, colors, palette, pimg.width / 2, pimg.height / 3);
                     } else {
-                         if (compression == VID32_FLAG_VIDEO_COMPRESSION_CUSTOM) videoStream += make32vid_6bit_cmp(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                        if (compression == VID32_FLAG_VIDEO_COMPRESSION_CUSTOM) videoStream += make32vid_6bit_cmp(characters, colors, palette, pimg.width / 2, pimg.height / 3);
                         else videoStream += make32vid_6bit(characters, colors, palette, pimg.width / 2, pimg.height / 3);
                     }
+                    renderSubtitles(subtitles, nframe, NULL, NULL, palette, pimg.width, pimg.height, &vid32subs);
                     break;
                 } case OutputType::HTTP: case OutputType::WebSocket: {
                     frameStorage.push_back("return " + makeTable(characters, colors, palette, pimg.width / 2, pimg.height / 3, true));
@@ -2435,7 +2456,7 @@ int main(int argc, const char * argv[]) {
         header.width = width / 2;
         header.height = height / 3;
         header.fps = floor(fps + 0.5);
-        header.nstreams = 2;
+        header.nstreams = !vid32subs.empty() ? 3 : 2;
         header.flags = compression;
         if (use5bit) header.flags |= VID32_FLAG_VIDEO_5BIT_CODES;
         if (useDFPWM) header.flags |= VID32_FLAG_AUDIO_COMPRESSION_DFPWM;
@@ -2464,8 +2485,9 @@ int main(int argc, const char * argv[]) {
             outfile.write(videoStream.c_str(), videoStream.size());
         }
         if (audioStorage) {
-            outfile.write((char*)&audioChunk, 9);
             if (useDFPWM) {
+                audioChunk.size = audioChunk.size / 8 + (audioChunk.size % 8 ? 1 : 0);
+                outfile.write((char*)&audioChunk, 9);
                 const AVCodec * dfpwm_codec;
                 AVCodecContext * dfpwm_codec_ctx;
                 if (!(dfpwm_codec = avcodec_find_encoder(AV_CODEC_ID_DFPWM))) {
@@ -2529,7 +2551,23 @@ int main(int argc, const char * argv[]) {
                 av_frame_free(&dfpwm_frame);
                 av_packet_free(&dfpwm_pkt);
                 avcodec_free_context(&dfpwm_codec_ctx);
-            } else outfile.write((char*)audioStorage, audioStorageSize);
+            } else {
+                outfile.write((char*)&audioChunk, 9);
+                outfile.write((char*)audioStorage, audioStorageSize);
+            }
+        }
+        if (!vid32subs.empty()) {
+            Vid32Chunk subtitleChunk;
+            subtitleChunk.nframes = vid32subs.size();
+            subtitleChunk.size = 0;
+            for (int i = 0; i < vid32subs.size(); i++) subtitleChunk.size += sizeof(Vid32SubtitleEvent) + vid32subs[i]->size;
+            subtitleChunk.type = (uint8_t)Vid32Chunk::Type::Subtitle;
+            outfile.write((char*)&subtitleChunk, 9);
+            for (int i = 0; i < vid32subs.size(); i++) {
+                outfile.write((char*)vid32subs[i], sizeof(Vid32SubtitleEvent) + vid32subs[i]->size);
+                free(vid32subs[i]);
+            }
+            vid32subs.clear();
         }
     } else if (mode == OutputType::BlitImage) {
         char timestr[26];

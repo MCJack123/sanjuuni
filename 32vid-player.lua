@@ -397,9 +397,10 @@ if file.read(4) ~= "32VD" then file.close() error("Not a 32vid file") end
 local width, height, fps, nStreams, flags = ("<HHBBH"):unpack(file.read(8))
 local video, audio, subtitles
 --local log = fs.open("32vid-log.txt", "w")
+print(nStreams)
 for _ = 1, nStreams do
     local size, nFrames, frameType = ("<IIB"):unpack(file.read(9))
-    print(size, nFrames, frameType)
+    print(("%X"):format(file.seek()), size, nFrames, frameType)
     if frameType == 0 and not video then
         local data = file.read(size)
         if bit32.band(flags, 3) == 2 then data = inflate(data) end
@@ -595,7 +596,7 @@ for _ = 1, nStreams do
     elseif frameType == 1 and not audio then
         audio = {}
         if bit32.band(flags, 12) == 0 then
-            for i = 1, size / 48000 do
+            for i = 1, math.ceil(size / 48000) do
                 local data
                 if jit then
                     data = {}
@@ -609,7 +610,7 @@ for _ = 1, nStreams do
             end
         elseif bit32.band(flags, 12) == 4 then
             local decode = dfpwm.make_decoder()
-            for i = 1, size / 48000 do
+            for i = 1, math.ceil(size / 6000) do
                 local data = file.read(math.min(size - (i-1)*6000, 6000))
                 if not data then break end
                 audio[i] = decode(data)
@@ -618,7 +619,7 @@ for _ = 1, nStreams do
     elseif frameType == 8 and not subtitles then
         subtitles = {}
         for _ = 1, nFrames do
-            local start, length, x, y, color, sz = ("<IIHHBxH"):unpack(file.read(14))
+            local start, length, x, y, color, sz = ("<IIHHBxH"):unpack(file.read(16))
             local text = file.read(sz)
             local sub = {text, hexstr:sub(bit32.band(color, 15)+1, bit32.band(color, 15)+1):rep(#text),
                 hexstr:sub(bit32.rshift(color, 4)+1, bit32.rshift(color, 4)+1):rep(#text), x = x, y = y}
