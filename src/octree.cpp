@@ -33,6 +33,24 @@ Modified by JackMacWindows for sanjuuni.
 
 #include "sanjuuni.hpp"
 
+struct octree_node {
+    uint32_t r, g, b;
+    uint32_t counter;
+    int leaf;
+    int leaf_parent;
+    struct octree_node* subnodes[8];
+    int palette_entry;
+    struct octree_node* prev;
+    struct octree_node* next;
+    struct octree_node* parent;
+};
+
+struct octree_tree {
+    struct octree_node* root;
+    uint32_t number_of_leaves;
+    struct octree_node* leaves_parents;
+};
+
 #define BITS_USED 8
 
 static struct octree_node* octree_create_node(struct octree_node* parent) {

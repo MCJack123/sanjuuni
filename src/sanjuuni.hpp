@@ -183,25 +183,6 @@ typedef vector2d<Vec3b> Mat;
 template<typename T> inline T min(T a, T b) {return a < b ? a : b;}
 template<typename T> inline T max(T a, T b) {return a > b ? a : b;}
 
-/* Octree structure definitions. */
-struct octree_node {
-    uint32_t r, g, b;
-    uint32_t counter;
-    int leaf;
-    int leaf_parent;
-    struct octree_node* subnodes[8];
-    int palette_entry;
-    struct octree_node* prev;
-    struct octree_node* next;
-    struct octree_node* parent;
-};
-
-struct octree_tree {
-    struct octree_node* root;
-    uint32_t number_of_leaves;
-    struct octree_node* leaves_parents;
-};
-
 /* 32vid types and constants. */
 #define VID32_FLAG_VIDEO_COMPRESSION_NONE     0x0000
 #define VID32_FLAG_VIDEO_COMPRESSION_LZW      0x0001

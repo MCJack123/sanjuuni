@@ -448,7 +448,7 @@ int main(int argc, const char * argv[]) {
     std::string input, output, subtitle;
     bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false;
     OutputType mode = OutputType::Default;
-    int compression = VID32_FLAG_VIDEO_COMPRESSION_DEFLATE;
+    int compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
     int port = 80, width = -1, height = -1, zlibCompression = 5;
     try {
         for (int i = 1; i < argc; i++) {
@@ -496,10 +496,14 @@ int main(int argc, const char * argv[]) {
     }
 
     if (useDFPWM) {
+#ifdef AV_CODEC_ID_DFPWM
         if (avcodec_version() < AV_VERSION_INT(59, 22, 0) || avformat_version() < AV_VERSION_INT(59, 18, 0)) {
+#endif
             std::cerr << "DFPWM output requires FFmpeg 5.1 or later\n";
             return 2;
+#ifdef AV_CODEC_ID_DFPWM
         }
+#endif
     }
 
     AVFormatContext * format_ctx = NULL;
@@ -583,6 +587,7 @@ int main(int argc, const char * argv[]) {
         }
     }
     // Open DFPWM encoder if required
+#ifdef AV_CODEC_ID_DFPWM
     if (useDFPWM) {
         if (!(dfpwm_codec = avcodec_find_encoder(AV_CODEC_ID_DFPWM))) {
             std::cerr << "Could not find DFPWM codec\n";
@@ -611,6 +616,7 @@ int main(int argc, const char * argv[]) {
             return error;
         }
     }
+#endif
     // Initialize packets/frames
     AVPacket * packet = av_packet_alloc(), * dfpwm_packet = useDFPWM ? av_packet_alloc() : NULL;
     AVFrame * frame = av_frame_alloc();
@@ -732,7 +738,6 @@ int main(int argc, const char * argv[]) {
                         rs.at(y, x) = {data[y*width*3+x*3], data[y*width*3+x*3+1], data[y*width*3+x*3+2]};
                 delete[] data;
                 std::vector<Vec3b> palette;
-                octree_tree tree;
                 if (useDefaultPalette) palette = defaultPalette;
                 else if (useOctree) palette = reducePalette_octree(rs, 16);
                 else if (useKmeans) palette = reducePalette_kMeans(rs, 16);
