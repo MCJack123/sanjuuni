@@ -3,8 +3,8 @@
     "version-string": "1.0",
     "description": "Converts images and videos into a format that can be displayed in ComputerCraft.",
     "dependencies": [
+        "openssl",
         {
-
             "name": "poco",
             "default-features": true,
             "features": ["netssl"]
