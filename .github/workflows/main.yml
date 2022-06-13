@@ -1,0 +1,48 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build-windows:
+
+    runs-on: windows-2019
+    steps:
+    - uses: actions/checkout@v1
+    - name: Restore vcpkg cache
+      uses: lukka/run-vcpkg@v10
+      with:
+        vcpkgGitCommitId: 314018fef43c7e3a52a3e46599313b70ace3977a
+    - name: Prepare environment
+      run: |
+        mkdir x64\Release
+        & $Env:VCPKG_ROOT\vcpkg integrate install
+        (Get-Content -path "$Env:VCPKG_ROOT\ports\poco\portfile.cmake") -replace "ENABLE_NETSSL_WIN", "FORCE_OPENSSL" | Set-Content -Path "$Env:VCPKG_ROOT\ports\poco\portfile.cmake"
+    - name: Build sanjuuni
+      run: |
+        function Invoke-Environment {
+            param
+            (
+                # Any cmd shell command, normally a configuration batch file.
+                [Parameter(Mandatory=$true)]
+                [string] $Command
+            )
+
+            $Command = "`"" + $Command + "`""
+            cmd /c "$Command > nul 2>&1 && set" | . { process {
+                if ($_ -match '^([^=]+)=(.*)') {
+                    [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2])
+                }
+            }}
+
+        }
+
+        Invoke-Environment "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+        msbuild "sanjuuni.sln" /p:Configuration=Release
+        # Remove buildtrees that kill the cache
+        Remove-Item vcpkg\buildtrees\* -Force -Recurse -ErrorAction SilentlyContinue
+    - name: Upload artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: sanjuuni-Artifact
+        path: |
+          x64\Release\sanjuuni.exe
