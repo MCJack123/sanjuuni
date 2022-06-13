@@ -79,20 +79,20 @@ static bool streamed = false;
 static bool useDFPWM = false;
 static const std::vector<Vec3b> defaultPalette = {
     {0xf0, 0xf0, 0xf0},
-    {0xf2, 0xb2, 0x33},
-    {0xe5, 0x7f, 0xd8},
-    {0x99, 0xb2, 0xf2},
-    {0xde, 0xde, 0x6c},
-    {0x7f, 0xcc, 0x19},
-    {0xf2, 0xb2, 0xcc},
+    {0x33, 0xb2, 0xf2},
+    {0xd8, 0x7f, 0xe5},
+    {0xf2, 0xb2, 0x99},
+    {0x6c, 0xde, 0xde},
+    {0x19, 0xcc, 0x7f},
+    {0xcc, 0xb2, 0xf2},
     {0x4c, 0x4c, 0x4c},
     {0x99, 0x99, 0x99},
-    {0x4c, 0x99, 0xb2},
-    {0xb2, 0x66, 0xe5},
-    {0x33, 0x66, 0xcc},
-    {0x7f, 0x66, 0x4c},
-    {0x57, 0xa6, 0x4e},
-    {0xcc, 0x4c, 0x4c},
+    {0xb2, 0x99, 0x4c},
+    {0xe5, 0x66, 0xb2},
+    {0xcc, 0x66, 0x33},
+    {0x4c, 0x66, 0x7f},
+    {0x4e, 0xa6, 0x57},
+    {0x4c, 0x4c, 0xcc},
     {0x11, 0x11, 0x11}
 };
 static const std::string playLua = "'local function b(c)local d,e=http.get('http://'..a..c,nil,true)if not d then error(e)end;local f=d.readAll()d.close()return f end;local g=textutils.unserializeJSON(b('/info'))local h,i={},{}local j=peripheral.find'speaker'term.clear()local k=2;parallel.waitForAll(function()for l=0,g.length-1 do h[l]=b('/video/'..l)if k>0 then k=k-1 end end end,function()for l=0,g.length/g.fps do i[l]=b('/audio/'..l)if k>0 then k=k-1 end end end,function()while k>0 do os.pullEvent()end;local m=os.epoch'utc'for l=0,g.length-1 do while not h[l]do os.pullEvent()end;local n=h[l]h[l]=nil;local o,p=assert(load(n,'=frame','t',{}))()for q,r in ipairs(p)do term.setPaletteColor(2^(q-1),table.unpack(r))end;for s,t in ipairs(o)do term.setCursorPos(1,s)term.blit(table.unpack(t))end;while os.epoch'utc'<m+(l+1)/g.fps*1000 do sleep(1/g.fps)end end end,function()if not j or not j.playAudio then return end;while k>0 do os.pullEvent()end;local u=0;while u<g.length/g.fps do while not i[u]do os.pullEvent()end;local v=i[u]i[u]=nil;v={v:byte(1,-1)}for q=1,#v do v[q]=v[q]-128 end;u=u+1;if not j.playAudio(v)or _HOST:find('v2.6.4')then repeat local w,x=os.pullEvent('speaker_audio_empty')until x==peripheral.getName(j)end end end)for q=0,15 do term.setPaletteColor(2^q,term.nativePaletteColor(2^q))end;term.setBackgroundColor(colors.black)term.setTextColor(colors.white)term.setCursorPos(1,1)term.clear()";
