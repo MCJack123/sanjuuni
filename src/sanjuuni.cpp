@@ -66,7 +66,8 @@ enum class OutputType {
     Vid32,
     HTTP,
     WebSocket,
-    BlitImage
+    BlitImage,
+    NFP
 };
 
 WorkQueue work;
@@ -425,6 +426,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("subtitle", "S", "ASS-formatted subtitle file to add to the video", false, "file", true));
     options.addOption(Option("output", "o", "Output file path", false, "path", true));
     options.addOption(Option("lua", "l", "Output a Lua script file (default for images; only does one frame)"));
+    options.addOption(Option("nfp", "n"  "Output an NFP format image for use in paint (changes proportions!)"));
     options.addOption(Option("raw", "r", "Output a rawmode-based image/video file (default for videos)"));
     options.addOption(Option("blit-image", "b", "Output a blit image (BIMG) format image/animation file"));
     options.addOption(Option("32vid", "3", "Output a 32vid format binary video file with compression + audio"));
@@ -458,6 +460,7 @@ int main(int argc, const char * argv[]) {
                 else if (option == "subtitle") subtitle = arg;
                 else if (option == "output") output = arg;
                 else if (option == "lua") mode = OutputType::Lua;
+                else if (option == "nfp") mode = OutputType::NFP;
                 else if (option == "raw") mode = OutputType::Raw;
                 else if (option == "32vid") mode = OutputType::Vid32;
                 else if (option == "http") {mode = OutputType::HTTP; port = std::stoi(arg);}
@@ -753,6 +756,10 @@ int main(int argc, const char * argv[]) {
                     outstream << makeLuaFile(characters, colors, palette, pimg.width / 2, pimg.height / 3);
                     outstream.flush();
                     break;
+                } case OutputType::NFP: {
+                    outstream << makeNFP(characters, colors, palette, pimg.width / 2, pimg.height / 3);
+                    outstream.flush();
+                    break;
                 } case OutputType::Raw: {
                     outstream << makeRawImage(characters, colors, palette, pimg.width / 2, pimg.height / 3);
                     outstream.flush();
@@ -790,7 +797,7 @@ int main(int argc, const char * argv[]) {
             if (error != AVERROR_EOF && error != AVERROR(EAGAIN)) {
                 std::cerr << "Failed to grab video frame: " << avErrorString(error) << "\n";
             }
-        } else if (packet->stream_index == audio_stream && mode != OutputType::Lua && mode != OutputType::Raw) {
+        } else if (packet->stream_index == audio_stream && mode != OutputType::Lua && mode != OutputType::Raw && mode != OutputType::BlitImage && mode != OutputType::NFP) {
             avcodec_send_packet(audio_codec_ctx, packet);
             while ((error = avcodec_receive_frame(audio_codec_ctx, frame)) == 0) {
                 if (!resample_ctx) resample_ctx = swr_alloc_set_opts(NULL, AV_CH_LAYOUT_MONO, AV_SAMPLE_FMT_U8, 48000, frame->channel_layout, (AVSampleFormat)frame->format, frame->sample_rate, 0, NULL);

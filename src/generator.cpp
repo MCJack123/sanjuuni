@@ -87,6 +87,26 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
     return retval.str();
 }
 
+std::string makeNFP(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
+    std::stringstream retval;
+    for (int y = 0; y < height; y++) {
+        std::string lines[3];
+        for (int x = 0; x < width; x++) {
+            int offset = y*height+x;
+            char fg = hexstr[colors[offset]&0xf], bg = hexstr[colors[offset]>>4];
+            uchar ch = characters[offset];
+            lines[0] += ch & 1 ? fg : bg;
+            lines[0] += ch & 2 ? fg : bg;
+            lines[1] += ch & 4 ? fg : bg;
+            lines[1] += ch & 8 ? fg : bg;
+            lines[2] += ch & 16 ? fg : bg;
+            lines[2] += bg;
+        }
+        retval << lines[0] << "\n" << lines[1] << "\n" << lines[2] << "\n";
+    }
+    return retval.str();
+}
+
 std::string makeRawImage(const uchar * screen, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
     std::stringstream output;
     for (int i = 0; i < 4; i++) output.put(0);

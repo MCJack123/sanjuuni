@@ -339,6 +339,16 @@ extern void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, u
  */
 extern std::string makeTable(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height, bool compact = false, bool embedPalette = false);
 /**
+ * Generates an NFP image from the specified CC image. This changes proportions!
+ * @param characters The character array to use
+ * @param colors The color pair array to use
+ * @param palette The palette for the image
+ * @param width The width of the image in characters
+ * @param height The height of the image in characters
+ * @return The generated NFP for the image data
+ */
+extern std::string makeNFP(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height);
+/**
  * Generates a Lua display script from the specified CC image. This file can be
  * run directly to show the image on-screen.
  * @param characters The character array to use
