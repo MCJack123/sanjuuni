@@ -426,7 +426,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("subtitle", "S", "ASS-formatted subtitle file to add to the video", false, "file", true));
     options.addOption(Option("output", "o", "Output file path", false, "path", true));
     options.addOption(Option("lua", "l", "Output a Lua script file (default for images; only does one frame)"));
-    options.addOption(Option("nfp", "n"  "Output an NFP format image for use in paint (changes proportions!)"));
+    options.addOption(Option("nfp", "n", "Output an NFP format image for use in paint (changes proportions!)"));
     options.addOption(Option("raw", "r", "Output a rawmode-based image/video file (default for videos)"));
     options.addOption(Option("blit-image", "b", "Output a blit image (BIMG) format image/animation file"));
     options.addOption(Option("32vid", "3", "Output a 32vid format binary video file with compression + audio"));
