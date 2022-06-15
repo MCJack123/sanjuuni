@@ -54,6 +54,14 @@ extern "C" {
 #ifdef USE_SDL
 #include <SDL2/SDL.h>
 #endif
+#if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
+#define SIZE_IOCTL
+#include <sys/ioctl.h>
+#endif
+#ifdef _WIN32
+#define SIZE_WIN
+#include <windows.h>
+#endif
 
 using namespace std::chrono;
 using namespace Poco::Util;
@@ -489,6 +497,16 @@ int main(int argc, const char * argv[]) {
     } catch (const OptionException &e) {
         if (e.className() != "HelpException") std::cerr << e.displayText() << "\n";
         HelpFormatter help(options);
+#ifdef SIZE_IOCTL
+        struct winsize w;
+        ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+        help.setWidth(w.ws_col);
+#endif
+#ifdef SIZE_WIN
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+        help.setWidth(csbi.srWindow.Right - csbi.srWindow.Left + 1);
+#endif
         help.setUnixStyle(true);
         help.setUsage("[options] -i <input> [-o <output> | -s <port> | -w <port> | -u <url>]");
         help.setCommand(argv[0]);
