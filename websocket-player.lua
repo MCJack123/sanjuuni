@@ -14,7 +14,7 @@ parallel.waitForAll(function()
         lock = true
         ws.send("v" .. f)
         local frame, ok = ws.receive(1)
-        while frame % 65535 == 0 do frame = frame .. ws.receive(1) end
+        while #frame % 65535 == 0 do frame = frame .. ws.receive(1) end
         lock = false
         if not ok then break end
         local image, palette = assert(load(frame, "=frame", "t", {}))()
