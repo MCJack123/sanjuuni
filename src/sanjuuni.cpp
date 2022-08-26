@@ -104,7 +104,7 @@ static const std::vector<Vec3b> defaultPalette = {
     {0x4c, 0x4c, 0xcc},
     {0x11, 0x11, 0x11}
 };
-static const std::string playLua = "'local function b(c)local d,e=http.get('http://'..a..c,nil,true)if not d then error(e)end;local f=d.readAll()d.close()return f end;local g=textutils.unserializeJSON(b('/info'))local h,i={},{}local j=peripheral.find'speaker'term.clear()local k=2;parallel.waitForAll(function()for l=0,g.length-1 do h[l]=b('/video/'..l)if k>0 then k=k-1 end end end,function()for l=0,g.length/g.fps do i[l]=b('/audio/'..l)if k>0 then k=k-1 end end end,function()while k>0 do os.pullEvent()end;local m=os.epoch'utc'for l=0,g.length-1 do while not h[l]do os.pullEvent()end;local n=h[l]h[l]=nil;local o,p=assert(load(n,'=frame','t',{}))()for q,r in ipairs(p)do term.setPaletteColor(2^(q-1),table.unpack(r))end;for s,t in ipairs(o)do term.setCursorPos(1,s)term.blit(table.unpack(t))end;while os.epoch'utc'<m+(l+1)/g.fps*1000 do sleep(1/g.fps)end end end,function()if not j or not j.playAudio then return end;while k>0 do os.pullEvent()end;local u=0;while u<g.length/g.fps do while not i[u]do os.pullEvent()end;local v=i[u]i[u]=nil;v={v:byte(1,-1)}for q=1,#v do v[q]=v[q]-128 end;u=u+1;if not j.playAudio(v)or _HOST:find('v2.6.4')then repeat local w,x=os.pullEvent('speaker_audio_empty')until x==peripheral.getName(j)end end end)for q=0,15 do term.setPaletteColor(2^q,term.nativePaletteColor(2^q))end;term.setBackgroundColor(colors.black)term.setTextColor(colors.white)term.setCursorPos(1,1)term.clear()";
+static const std::string playLua = "'local function b(c)local d,e=http.get('http://'..a..c,nil,true)if not d then error(e)end;local f=d.readAll()d.close()return f end;local g=textutils.unserializeJSON(b('/info'))local h,i={},{}local j=peripheral.find'speaker'term.clear()local k=2;parallel.waitForAll(function()for l=0,g.length-1 do h[l]=b('/video/'..l)if k>0 then k=k-1 end end end,function()for l=0,g.length/g.fps do i[l]=b('/audio/'..l)if k>0 then k=k-1 end end end,function()while k>0 do os.pullEvent()end;local m=os.epoch'utc'for l=0,g.length-1 do while not h[l]do os.pullEvent()end;local n=h[l]h[l]=nil;local o,p=assert(load(n,'=frame','t',{}))()for q=0,#p do term.setPaletteColor(2^q,table.unpack(p[q]))end;for s,t in ipairs(o)do term.setCursorPos(1,s)term.blit(table.unpack(t))end;while os.epoch'utc'<m+(l+1)/g.fps*1000 do sleep(1/g.fps)end end end,function()if not j or not j.playAudio then return end;while k>0 do os.pullEvent()end;local u=0;while u<g.length/g.fps do while not i[u]do os.pullEvent()end;local v=i[u]i[u]=nil;v={v:byte(1,-1)}for q=1,#v do v[q]=v[q]-128 end;u=u+1;if not j.playAudio(v)or _HOST:find('v2.6.4')then repeat local w,x=os.pullEvent('speaker_audio_empty')until x==peripheral.getName(j)end end end)for q=0,15 do term.setPaletteColor(2^q,term.nativePaletteColor(2^q))end;term.setBackgroundColor(colors.black)term.setTextColor(colors.white)term.setCursorPos(1,1)term.clear()";
 
 class HelpException: public OptionException {
 public:
@@ -262,13 +262,14 @@ static void serveWebSocket(WebSocket * ws, double * fps) {
                         memset(audioStorage + max(audioStorageSize, 0L), 0, size - max(audioStorageSize, 0L));
                     }
                     if (audioStorageSize > -size) ws->sendFrame(audioStorageSize < 0 ? audioStorage - audioStorageSize : audioStorage, size, WebSocket::FRAME_BINARY);
+                    else ws->sendFrame("!", 1, WebSocket::FRAME_TEXT);
                     if (audioStorageSize > size) memmove(audioStorage, audioStorage + size, audioStorageSize - size);
-                    audioStorageSize -= size;
+                    audioStorageSize = max(audioStorageSize - size, 0L); //audioStorageSize -= size;
                 }
                 else if (offset >= audioStorageSize || offset < 0) ws->sendFrame("!", 1, WebSocket::FRAME_TEXT);
                 else ws->sendFrame(audioStorage + offset, offset + size > audioStorageSize ? audioStorageSize - offset : size, WebSocket::FRAME_BINARY);
             } else if (buf[0] == 'n') {
-                std::string data = std::to_string(streamed ? totalFrames : frameStorage.size());
+                std::string data = std::to_string(totalFrames);
                 ws->sendFrame(data.c_str(), data.size(), WebSocket::FRAME_TEXT);
             } else if (buf[0] == 'f') {
                 std::string data = std::to_string(*fps);
@@ -517,12 +518,16 @@ int main(int argc, const char * argv[]) {
     }
 
     if (useDFPWM) {
-#ifdef AV_CODEC_ID_DFPWM
+#if (LIBAVCODEC_VERSION_MAJOR > 59 || (LIBAVCODEC_VERSION_MAJOR == 59 && LIBAVCODEC_VERSION_MINOR >= 22)) && \
+    (LIBAVFORMAT_VERSION_MAJOR > 59 || (LIBAVFORMAT_VERSION_MAJOR == 59 && LIBAVFORMAT_VERSION_MINOR >= 18))
+#define HAS_DFPWM 1
         if (avcodec_version() < AV_VERSION_INT(59, 22, 0) || avformat_version() < AV_VERSION_INT(59, 18, 0)) {
+#else
+#warning DFPWM support not detected, -d will be disabled.
 #endif
-            std::cerr << "DFPWM output requires FFmpeg 5.1 or later\n";
+            std::cerr << "DFPWM output requires FFmpeg 5.1 or later\nlavc " << avcodec_version() << ", lavf " << avformat_version() << "\n";
             return 2;
-#ifdef AV_CODEC_ID_DFPWM
+#ifdef HAS_DFPWM
         }
 #endif
     }
@@ -608,7 +613,7 @@ int main(int argc, const char * argv[]) {
         }
     }
     // Open DFPWM encoder if required
-#ifdef AV_CODEC_ID_DFPWM
+#ifdef HAS_DFPWM
     if (useDFPWM) {
         if (!(dfpwm_codec = avcodec_find_encoder(AV_CODEC_ID_DFPWM))) {
             std::cerr << "Could not find DFPWM codec\n";
@@ -926,7 +931,7 @@ int main(int argc, const char * argv[]) {
         time_t now = time(0);
         struct tm * time = gmtime(&now);
         strftime(timestr, 26, "%FT%T%z", time);
-        outfile << "creator = 'sanjuuni',\nversion = '1.0',\nsecondsPerFrame = " << (1.0 / fps) << ",\nanimation = " << (nframe > 1 ? "true" : "false") << ",\ndate = '" << timestr << "',\ntitle = '" << input << "'\n}\n";
+        outfile << "creator = 'sanjuuni',\nversion = '1.0.0',\nsecondsPerFrame = " << (1.0 / fps) << ",\nanimation = " << (nframe > 1 ? "true" : "false") << ",\ndate = '" << timestr << "',\ntitle = '" << input << "'\n}\n";
     }
 cleanup:
     std::cerr << "\rframe " << nframe << "/" << format_ctx->streams[video_stream]->nb_frames << "\n";

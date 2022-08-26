@@ -18,7 +18,7 @@ parallel.waitForAll(function()
         lock = false
         if not ok then break end
         local image, palette = assert(load(frame, "=frame", "t", {}))()
-        for i, v in ipairs(palette) do term.setPaletteColor(2^(i-1), table.unpack(v)) end
+        for i = 0, #palette do term.setPaletteColor(2^i, table.unpack(palette[i])) end
         for y, r in ipairs(image) do
             term.setCursorPos(1, y)
             term.blit(table.unpack(r))
