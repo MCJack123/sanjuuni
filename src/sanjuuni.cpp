@@ -450,6 +450,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("compression", "c", "Compression type for 32vid videos; available modes: none|lzw|deflate|custom", false, "mode", true).validator(new RegExpValidator("^(none|lzw|deflate|custom)$")));
     options.addOption(Option("compression-level", "L", "Compression level for 32vid videos when using DEFLATE", false, "1-9", true).validator(new IntValidator(1, 9)));
     options.addOption(Option("dfpwm", "d", "Use DFPWM compression on audio"));
+    options.addOption(Option("mute", "m", "Remove audio from output"));
     options.addOption(Option("width", "W", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("height", "H", "Resize the image to the specified height", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("help", "h", "Show this help"));
@@ -457,7 +458,7 @@ int main(int argc, const char * argv[]) {
     argparse.setUnixStyle(true);
 
     std::string input, output, subtitle;
-    bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false;
+    bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false;
     OutputType mode = OutputType::Default;
     int compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
     int port = 80, width = -1, height = -1, zlibCompression = 5;
@@ -488,6 +489,7 @@ int main(int argc, const char * argv[]) {
                     else if (arg == "custom") compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
                 } else if (option == "compression-level") zlibCompression = std::stoi(arg);
                 else if (option == "dfpwm") useDFPWM = true;
+                else if (option == "mute") mute = true;
                 else if (option == "width") width = std::stoi(arg);
                 else if (option == "height") height = std::stoi(arg);
                 else if (option == "help") throw HelpException();
@@ -820,7 +822,7 @@ int main(int argc, const char * argv[]) {
             if (error != AVERROR_EOF && error != AVERROR(EAGAIN)) {
                 std::cerr << "Failed to grab video frame: " << avErrorString(error) << "\n";
             }
-        } else if (packet->stream_index == audio_stream && mode != OutputType::Lua && mode != OutputType::Raw && mode != OutputType::BlitImage && mode != OutputType::NFP) {
+        } else if (packet->stream_index == audio_stream && mode != OutputType::Lua && mode != OutputType::Raw && mode != OutputType::BlitImage && mode != OutputType::NFP && !mute) {
             avcodec_send_packet(audio_codec_ctx, packet);
             while ((error = avcodec_receive_frame(audio_codec_ctx, frame)) == 0) {
                 if (!resample_ctx) resample_ctx = swr_alloc_set_opts(NULL, AV_CH_LAYOUT_MONO, AV_SAMPLE_FMT_U8, 48000, frame->channel_layout, (AVSampleFormat)frame->format, frame->sample_rate, 0, NULL);
