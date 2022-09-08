@@ -883,7 +883,7 @@ int main(int argc, const char * argv[]) {
         header.width = width / 2;
         header.height = height / 3;
         header.fps = floor(fps + 0.5);
-        header.nstreams = !vid32subs.empty() ? 3 : 2;
+        header.nstreams = (vid32subs.empty() ? 0 : 1) + (audioStorage ? 1 : 0) + 1;
         header.flags = compression | VID32_FLAG_VIDEO_5BIT_CODES;
         if (useDFPWM) header.flags |= VID32_FLAG_AUDIO_COMPRESSION_DFPWM;
 
