@@ -523,7 +523,7 @@ int main(int argc, const char * argv[]) {
 #define HAS_DFPWM 1
         if (avcodec_version() < AV_VERSION_INT(59, 22, 0) || avformat_version() < AV_VERSION_INT(59, 18, 0)) {
 #else
-#warning DFPWM support not detected, -d will be disabled.
+#pragma warning ("DFPWM support not detected, -d will be disabled.")
 #endif
             std::cerr << "DFPWM output requires FFmpeg 5.1 or later\nlavc " << avcodec_version() << ", lavf " << avformat_version() << "\n";
             return 2;
