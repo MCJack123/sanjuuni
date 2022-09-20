@@ -78,12 +78,19 @@ enum class OutputType {
     NFP
 };
 
+#ifdef STATUS_FUNCTION
+extern void STATUS_FUNCTION(int nframe, int totalFrames, milliseconds elapsed, milliseconds remaining, int fps);
+extern bool externalStop;
+#endif
+
 WorkQueue work;
+std::mutex exitLock;
+std::condition_variable exitNotify;
 static std::vector<std::string> frameStorage;
 static uint8_t * audioStorage = NULL;
 static long audioStorageSize = 0, totalFrames = 0;
-static std::mutex exitLock, streamedLock;
-static std::condition_variable exitNotify, streamedNotify;
+static std::mutex streamedLock;
+static std::condition_variable streamedNotify;
 static bool streamed = false;
 static bool useDFPWM = false;
 static const std::vector<Vec3b> defaultPalette = {
@@ -741,8 +748,12 @@ int main(int argc, const char * argv[]) {
                 auto now = system_clock::now();
                 if (now - lastUpdate > milliseconds(250)) {
                     auto t = now - start;
+#ifdef STATUS_FUNCTION
+                    STATUS_FUNCTION(nframe++, format_ctx->streams[video_stream]->nb_frames, duration_cast<milliseconds>(t), nframe > 0 ? duration_cast<milliseconds>((t * totalFrames / nframe) - t) : milliseconds(0), t >= seconds(1) ? floor((double)nframe / duration_cast<seconds>(t).count()) : 0);
+#else
                     std::cerr << "\rframe " << nframe++ << "/" << format_ctx->streams[video_stream]->nb_frames << " (elapsed " << t << ", remaining " << ((t * totalFrames / nframe) - t) << ", " << floor((double)nframe / duration_cast<seconds>(t).count()) << " fps)";
                     std::cerr.flush();
+#endif
                     lastUpdate = now;
                 } else nframe++;
                 Mat out;
@@ -870,6 +881,9 @@ int main(int argc, const char * argv[]) {
             }
         }
         av_packet_unref(packet);
+#ifdef STATUS_FUNCTION
+        if (externalStop) break;
+#endif
     }
     if (mode == OutputType::Vid32) {
         Vid32Chunk videoChunk, audioChunk;
@@ -936,7 +950,12 @@ int main(int argc, const char * argv[]) {
         outfile << "creator = 'sanjuuni',\nversion = '1.0.0',\nsecondsPerFrame = " << (1.0 / fps) << ",\nanimation = " << (nframe > 1 ? "true" : "false") << ",\ndate = '" << timestr << "',\ntitle = '" << input << "'\n}\n";
     }
 cleanup:
-    std::cerr << "\rframe " << nframe << "/" << format_ctx->streams[video_stream]->nb_frames << "\n";
+    auto t = system_clock::now() - start;
+#ifdef STATUS_FUNCTION
+    STATUS_FUNCTION(nframe, format_ctx->streams[video_stream]->nb_frames, duration_cast<milliseconds>(t), milliseconds(0), t >= seconds(1) ? floor((double)nframe / duration_cast<seconds>(t).count()) : 0);
+#else
+    std::cerr << "\rframe " << nframe << "/" << format_ctx->streams[video_stream]->nb_frames << " (elapsed " << t << ", remaining 00:00, " << floor((double)nframe / duration_cast<seconds>(t).count()) << " fps)\n";
+#endif
     if (outfile.is_open()) outfile.close();
     if (resize_ctx) sws_freeContext(resize_ctx);
     if (resample_ctx) swr_free(&resample_ctx);
@@ -948,6 +967,9 @@ cleanup:
     if (dfpwm_codec_ctx) avcodec_free_context(&dfpwm_codec_ctx);
     avformat_close_input(&format_ctx);
     if (ws) {
+#ifdef STATUS_FUNCTION
+        if (!externalStop)
+#endif
         if (!streamed) {
             std::cout << "Serving on port " << port << "\n";
             std::unique_lock<std::mutex> lock(exitLock);
@@ -956,6 +978,9 @@ cleanup:
         ws->shutdown();
         delete ws;
     } else if (srv) {
+#ifdef STATUS_FUNCTION
+        if (!externalStop)
+#endif
         if (!streamed) {
             std::cout << "Serving on port " << port << "\n";
             std::unique_lock<std::mutex> lock(exitLock);
@@ -965,6 +990,9 @@ cleanup:
         delete srv;
     }
     if (audioStorage) free(audioStorage);
+    audioStorage = NULL;
+    audioStorageSize = totalFrames = 0;
+    frameStorage.clear();
 #ifdef USE_SDL
     while (true) {
         SDL_Event e;
