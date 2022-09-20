@@ -15,7 +15,7 @@ local lock = 2
 parallel.waitForAll(function()
     for f = 0, info.length - 1 do frames[f] = get('/video/' .. f) if lock > 0 then lock = lock - 1 end end
 end, function()
-    for f = 0, info.length / info.fps do audios[f] = get('/audio/' .. f) if lock > 0 then lock = lock - 1 end end
+    pcall(function() for f = 0, info.length / info.fps do audios[f] = get('/audio/' .. f) if lock > 0 then lock = lock - 1 end end end)
 end, function()
     while lock > 0 do os.pullEvent() end
     local start = os.epoch 'utc'
@@ -24,7 +24,7 @@ end, function()
         local frame = frames[f]
         frames[f] = nil
         local image, palette = assert(load(frame, '=frame', 't', {}))()
-        for i, v in ipairs(palette) do term.setPaletteColor(2^(i-1), table.unpack(v)) end
+        for i = 0, #palette do term.setPaletteColor(2^i, table.unpack(palette[i])) end
         for y, r in ipairs(image) do
             term.setCursorPos(1, y)
             term.blit(table.unpack(r))

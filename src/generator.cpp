@@ -86,6 +86,7 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
             retval << "{" << std::to_string(c[2] / 255.0) << "," << std::to_string(c[1] / 255.0) << "," << std::to_string(c[0] / 255.0) << "},";
         } else if (first) retval << "    [0] = {" << std::to_string(c[2] / 255.0) << ", " << std::to_string(c[1] / 255.0) << ", " << std::to_string(c[0] / 255.0) << "},\n";
         else retval << "    {" << std::to_string(c[2] / 255.0) << ", " << std::to_string(c[1] / 255.0) << ", " << std::to_string(c[0] / 255.0) << "},\n";
+        first = false;
     }
     retval << (embedPalette ? "    }\n}" : "}");
     return retval.str();
