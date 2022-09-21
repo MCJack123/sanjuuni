@@ -291,17 +291,18 @@ __kernel void toCCPixel(__global uchar * colors, __global uchar * character, __g
     default:
         /* Fall back on median cut */
         red.x = green.x = blue.x = 255;
+        red.y = green.y = blue.y = 0;
         for (i = 0; i < n_used_colors; i++) {
             if (palette[used_colors[i]].x < red.x) red.x = palette[used_colors[i]].x;
-            if (palette[used_colors[i]].x > red.x) red.y = palette[used_colors[i]].x;
+            if (palette[used_colors[i]].x > red.y) red.y = palette[used_colors[i]].x;
             if (palette[used_colors[i]].y < green.x) green.x = palette[used_colors[i]].y;
-            if (palette[used_colors[i]].y > green.x) green.y = palette[used_colors[i]].y;
+            if (palette[used_colors[i]].y > green.y) green.y = palette[used_colors[i]].y;
             if (palette[used_colors[i]].z < blue.x) blue.x = palette[used_colors[i]].z;
-            if (palette[used_colors[i]].z > blue.x) blue.y = palette[used_colors[i]].z;
+            if (palette[used_colors[i]].z > blue.y) blue.y = palette[used_colors[i]].z;
         }
         sums[0] = red.y - red.x; sums[1] = green.y - green.x; sums[2] = blue.y - blue.x;
-        if (sums[0] > sums[1] and sums[0] > sums[2]) maxComponent = 0;
-        else if (sums[1] > sums[2] and sums[1] > sums[0]) maxComponent = 1;
+        if (sums[0] > sums[1] && sums[0] > sums[2]) maxComponent = 0;
+        else if (sums[1] > sums[2] && sums[1] > sums[0]) maxComponent = 1;
         else maxComponent = 2;
         /* insertion sort */
         for (i = 0; i < 6; i++) dither_out[i] = colors[i];

@@ -36,8 +36,8 @@ static void medianCut(std::vector<Vec3b>& pal, int num, int lastComponent, std::
         }
         Vec3b ranges = {(uint8_t)(red[1] - red[0]), (uint8_t)(green[1] - green[0]), (uint8_t)(blue[1] - blue[0])};
         int maxComponent;
-        if (ranges[0] > ranges[1] and ranges[0] > ranges[2]) maxComponent = 0;
-        else if (ranges[1] > ranges[2] and ranges[1] > ranges[0]) maxComponent = 1;
+        if (ranges[0] > ranges[1] && ranges[0] > ranges[2]) maxComponent = 0;
+        else if (ranges[1] > ranges[2] && ranges[1] > ranges[0]) maxComponent = 1;
         else maxComponent = 2;
         if (maxComponent == lastComponent) {
             if (abs(ranges[maxComponent] - ranges[(maxComponent+1)%3]) < 8 && abs(ranges[maxComponent] - ranges[(maxComponent+2)%3]) < 8)
@@ -170,7 +170,7 @@ std::vector<Vec3b> reducePalette_kMeans(const Mat& image, int numColors) {
         states[i].numColors = numColors;
         states[i].locks = &locks;
         states[i].changed = &changed;
-        Vec3d sum;
+        Vec3d sum {0, 0, 0};
         int size = 0;
         for (const Vec3d* c : (*colors)[i].second) {
             sum += *c;
