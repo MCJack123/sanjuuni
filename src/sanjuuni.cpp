@@ -276,7 +276,7 @@ static void serveWebSocket(WebSocket * ws, double * fps) {
                 else if (offset >= audioStorageSize || offset < 0) ws->sendFrame("!", 1, WebSocket::FRAME_TEXT);
                 else ws->sendFrame(audioStorage + offset, offset + size > audioStorageSize ? audioStorageSize - offset : size, WebSocket::FRAME_BINARY);
             } else if (buf[0] == 'n') {
-                std::string data = std::to_string(totalFrames);
+                std::string data = std::to_string(max((size_t)totalFrames, frameStorage.size()));
                 ws->sendFrame(data.c_str(), data.size(), WebSocket::FRAME_TEXT);
             } else if (buf[0] == 'f') {
                 std::string data = std::to_string(*fps);
