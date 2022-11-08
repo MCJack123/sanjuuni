@@ -742,7 +742,7 @@ int main(int argc, const char * argv[]) {
             if (nframe == 0) {
                 if (!subtitle.empty()) subtitles = parseASSSubtitles(subtitle, fps);
                 if (mode == OutputType::Raw) outstream << "32Vid 1.1\n" << fps << "\n";
-                else if (mode == OutputType::BlitImage) outstream << "{\n";
+                else if (mode == OutputType::BlitImage) outstream << "{";
             }
             while ((error = avcodec_receive_frame(video_codec_ctx, frame)) == 0) {
                 auto now = system_clock::now();
@@ -801,7 +801,7 @@ int main(int argc, const char * argv[]) {
                     outstream.flush();
                     break;
                 } case OutputType::BlitImage: {
-                    outstream << makeTable(characters, colors, palette, pimg.width / 2, pimg.height / 3, false, true) << ",\n";
+                    outstream << makeTable(characters, colors, palette, pimg.width / 2, pimg.height / 3, true, true) << ",";
                     outstream.flush();
                     break;
                 } case OutputType::Vid32: {
@@ -947,7 +947,7 @@ int main(int argc, const char * argv[]) {
         time_t now = time(0);
         struct tm * time = gmtime(&now);
         strftime(timestr, 26, "%FT%T%z", time);
-        outfile << "creator = 'sanjuuni',\nversion = '1.0.0',\nsecondsPerFrame = " << (1.0 / fps) << ",\nanimation = " << (nframe > 1 ? "true" : "false") << ",\ndate = '" << timestr << "',\ntitle = '" << input << "'\n}\n";
+        outfile << "creator='sanjuuni',version='1.0.0',secondsPerFrame=" << (1.0 / fps) << ",animation=" << (nframe > 1 ? "true" : "false") << ",date='" << timestr << "',title='" << input << "'}";
     }
 cleanup:
     auto t = system_clock::now() - start;

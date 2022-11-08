@@ -78,7 +78,7 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
         if (compact) retval << "{\"" << text << "\",\"" << fg << "\",\"" << bg << "\"},";
         else retval << "    {\n        \"" << text << "\",\n        \"" << fg << "\",\n        \"" << bg << "\"\n    },\n";
     }
-    retval << (embedPalette ? "    palette = {\n" : (compact ? "},{" : "}, {\n"));
+    retval << (embedPalette ? (compact ? "palette={" : "    palette = {\n") : (compact ? "},{" : "}, {\n"));
     bool first = true;
     for (const Vec3b& c : palette) {
         if (compact) {
@@ -88,7 +88,7 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
         else retval << "    {" << std::to_string(c[2] / 255.0) << ", " << std::to_string(c[1] / 255.0) << ", " << std::to_string(c[0] / 255.0) << "},\n";
         first = false;
     }
-    retval << (embedPalette ? "    }\n}" : "}");
+    retval << (embedPalette ? (compact ? "}}" : "    }\n}") : "}");
     return retval.str();
 }
 

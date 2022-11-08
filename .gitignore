@@ -13,4 +13,5 @@ x64
 ARM64
 vcpkg_installed
 *.32v
+*.bimg
 obj
