@@ -456,6 +456,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("kmeans", "k", "Use k-means for highest quality color conversion (slowest)"));
     options.addOption(Option("compression", "c", "Compression type for 32vid videos; available modes: none|lzw|deflate|custom", false, "mode", true).validator(new RegExpValidator("^(none|lzw|deflate|custom)$")));
     options.addOption(Option("compression-level", "L", "Compression level for 32vid videos when using DEFLATE", false, "1-9", true).validator(new IntValidator(1, 9)));
+    options.addOption(Option("binary", "B", "Output blit image files in a more-compressed binary format (requires opening the file in binary mode)"));
     options.addOption(Option("dfpwm", "d", "Use DFPWM compression on audio"));
     options.addOption(Option("mute", "m", "Remove audio from output"));
     options.addOption(Option("width", "W", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
@@ -465,7 +466,7 @@ int main(int argc, const char * argv[]) {
     argparse.setUnixStyle(true);
 
     std::string input, output, subtitle;
-    bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false;
+    bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false;
     OutputType mode = OutputType::Default;
     int compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
     int port = 80, width = -1, height = -1, zlibCompression = 5;
@@ -495,6 +496,7 @@ int main(int argc, const char * argv[]) {
                     else if (arg == "deflate") compression = VID32_FLAG_VIDEO_COMPRESSION_DEFLATE;
                     else if (arg == "custom") compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
                 } else if (option == "compression-level") zlibCompression = std::stoi(arg);
+                else if (option == "binary") binary = true;
                 else if (option == "dfpwm") useDFPWM = true;
                 else if (option == "mute") mute = true;
                 else if (option == "width") width = std::stoi(arg);
@@ -658,7 +660,7 @@ int main(int argc, const char * argv[]) {
 
     std::ofstream outfile;
     if (output != "-" && output != "" && mode != OutputType::WebSocket) {
-        outfile.open(output);
+        outfile.open(output, std::ios::out | std::ios::binary);
         if (!outfile.good()) {
             std::cerr << "Could not open output file!\n";
             av_frame_free(&frame);
@@ -678,6 +680,7 @@ int main(int argc, const char * argv[]) {
     int nframe = 0;
     auto start = system_clock::now();
     auto lastUpdate = system_clock::now() - seconds(1);
+    bool first = true;
     if (mode == OutputType::HTTP) {
         srv = new HTTPServer(new HTTPListener::Factory(&fps), port);
         srv->start();
@@ -739,10 +742,11 @@ int main(int argc, const char * argv[]) {
         if (packet->stream_index == video_stream) {
             avcodec_send_packet(video_codec_ctx, packet);
             fps = (double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den;
-            if (nframe == 0) {
+            if (first) {
                 if (!subtitle.empty()) subtitles = parseASSSubtitles(subtitle, fps);
                 if (mode == OutputType::Raw) outstream << "32Vid 1.1\n" << fps << "\n";
-                else if (mode == OutputType::BlitImage) outstream << "{";
+                else if (mode == OutputType::BlitImage) outstream << (binary ? "{" : "{\n");
+                first = false;
             }
             while ((error = avcodec_receive_frame(video_codec_ctx, frame)) == 0) {
                 auto now = system_clock::now();
@@ -801,7 +805,7 @@ int main(int argc, const char * argv[]) {
                     outstream.flush();
                     break;
                 } case OutputType::BlitImage: {
-                    outstream << makeTable(characters, colors, palette, pimg.width / 2, pimg.height / 3, true, true) << ",";
+                    outstream << makeTable(characters, colors, palette, pimg.width / 2, pimg.height / 3, binary, true, binary) << (binary ? "," : ",\n");
                     outstream.flush();
                     break;
                 } case OutputType::Vid32: {
@@ -947,7 +951,8 @@ int main(int argc, const char * argv[]) {
         time_t now = time(0);
         struct tm * time = gmtime(&now);
         strftime(timestr, 26, "%FT%T%z", time);
-        outfile << "creator='sanjuuni',version='1.0.0',secondsPerFrame=" << (1.0 / fps) << ",animation=" << (nframe > 1 ? "true" : "false") << ",date='" << timestr << "',title='" << input << "'}";
+        if (binary) outfile << "creator='sanjuuni',version='1.0.0',secondsPerFrame=" << (1.0 / fps) << ",animation=" << (nframe > 1 ? "true" : "false") << ",date='" << timestr << "',title='" << input << "'}";
+        else outfile << "creator = 'sanjuuni',\nversion = '1.0.0',\nsecondsPerFrame = " << (1.0 / fps) << ",\nanimation = " << (nframe > 1 ? "true" : "false") << ",\ndate = '" << timestr << "',\ntitle = '" << input << "'\n}\n";
     }
 cleanup:
     auto t = system_clock::now() - start;

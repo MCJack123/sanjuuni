@@ -337,7 +337,7 @@ extern void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, u
  * @param embedPalette Whether to embed the palette as a `palette` key (for BIMG)
  * @return The generated blit image source for the image data
  */
-extern std::string makeTable(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height, bool compact = false, bool embedPalette = false);
+extern std::string makeTable(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height, bool compact = false, bool embedPalette = false, bool binary = false);
 /**
  * Generates an NFP image from the specified CC image. This changes proportions!
  * @param characters The character array to use

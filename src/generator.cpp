@@ -63,14 +63,14 @@ void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** 
     delete[] colors;
 }
 
-std::string makeTable(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height, bool compact, bool embedPalette) {
+std::string makeTable(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height, bool compact, bool embedPalette, bool binary) {
     std::stringstream retval;
     retval << (compact ? "{" : "{\n");
     for (int y = 0; y < height; y++) {
         std::string text, fg, bg;
         for (int x = 0; x < width; x++) {
             uchar c = characters[y*width+x], cc = colors[y*width+x];
-            if (c >= 32 && c < 127 && c != '"' && c != '\\') text += c;
+            if ((binary || (c >= 32 && c < 127)) && c != '"' && c != '\\') text += c;
             else text += "\\" + std::to_string(c);
             fg += hexstr[cc & 0xf];
             bg += hexstr[cc >> 4];
