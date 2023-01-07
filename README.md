@@ -1,6 +1,17 @@
 # sanjuuni
 Converts images and videos into a format that can be displayed in ComputerCraft. Spiritual successor to [juroku](https://github.com/tmpim/juroku), which is hard to build and isn't as flexible.
 
+## Installation
+### Linux
+#### AUR
+
+sanjuuni is available in the Arch User Repository; use your favorite AUR helper to install it:
+```sh
+yay -S sanjuuni
+```
+
+The `sanjuuni-git` package is the bleeding edge version of sanjuuni.
+
 ## Building
 Requirements:
 * C++11 or later compiler
