@@ -145,13 +145,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <None Include="32vid-player.lua" />
     <None Include="configure.ac" />
+    <None Include="extras" />
     <None Include="Makefile.in" />
-    <None Include="raw-player.lua" />
     <None Include="README.md" />
     <None Include="vcpkg.json" />
-    <None Include="websocket-player.lua" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\cc-pixel.cpp" />

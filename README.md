@@ -88,6 +88,8 @@ ComputerCraft.
 * `raw-player.lua` plays back raw video files from the disk. Simply give it the file name and it will decode and play the file.
 * `websocket-player.lua` plays a stream from a sanjuuni WebSocket server. Simply give it the WebSocket URL and it will play the stream, with audio if a speaker is attached.
 
+All playback programs are available in the `extras/lua` directory.
+
 ## Formats
 * The Lua file output creates a simple script that displays the image and waits for the return key to be pressed. The data is stored as a plain blit table, so it can be copied to another file as desired with the display code.
 * The raw file output creates a file based on [CraftOS-PC Raw Mode](https://www.craftos-pc.cc/docs/rawmode). Each frame packet is stored on one line, and the first two lines contain a version header and the FPS. (If the FPS is 0, this is a plain image.)
