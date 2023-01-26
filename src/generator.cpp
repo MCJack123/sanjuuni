@@ -152,10 +152,13 @@ std::string makeRawImage(const uchar * screen, const uchar * colors, const std::
         output.put(c);
         output.put(n);
     }
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < palette.size(); i++) {
         output.put(palette[i][2]);
         output.put(palette[i][1]);
         output.put(palette[i][0]);
+    }
+    for (int i = palette.size(); i < 16; i++) {
+        output.put(0); output.put(0); output.put(0);
     }
     std::string orig = output.str();
     std::stringstream ss;
