@@ -1,6 +1,44 @@
 # sanjuuni
 Converts images and videos into a format that can be displayed in ComputerCraft. Spiritual successor to [juroku](https://github.com/tmpim/juroku), which is hard to build and isn't as flexible.
 
+## Installation
+### Linux
+#### AUR
+
+sanjuuni is available in the Arch User Repository; use your favorite AUR helper to install it:
+```sh
+yay -S sanjuuni
+```
+
+The `sanjuuni-git` package is the bleeding edge version of sanjuuni.
+
+#### Nix/NixOS
+
+sanjuuni is available in the Nixpkgs unstable branch. To use it, update your Nix channels and launch a shell with sanjuuni in your path:
+
+```sh
+nix-channel --update
+nix-shell -p pkgs.sanjuuni
+# You will now be in a bash shell with sanjuuni on your path.
+sanjuuni --help # Use sanjuuni like normal
+exit
+# sanjuuni is no longer on the path; execute nix-shell again to get it back.
+```
+
+Alternatively, if your project uses sanjuuni in a script, add `sanjuuni` to `mkShell.buildInputs`.
+
+```nix
+with (import <nixpkgs> {});
+mkShell {
+  buildInputs = [
+    bash
+    sanjuuni
+  ];
+}
+```
+
+Nix support is maintained by [Tomodachi94](https://github.com/tomodachi94). For any issues with the Nix package itself, please contact him by opening an issue on [Nixpkgs](https://github.com/NixOS/nixpkgs/issues/new/choose).
+
 ## Building
 Requirements:
 * C++11 or later compiler
