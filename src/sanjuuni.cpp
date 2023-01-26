@@ -22,6 +22,7 @@
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <libavdevice/avdevice.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
 #include <zlib.h>
@@ -440,6 +441,7 @@ int main(int argc, const char * argv[]) {
     OptionSet options;
     options.addOption(Option("input", "i", "Input image or video", true, "file", true));
     options.addOption(Option("subtitle", "S", "ASS-formatted subtitle file to add to the video", false, "file", true));
+    options.addOption(Option("format", "f", "Force a format to use for the input file", false, "format", true));
     options.addOption(Option("output", "o", "Output file path", false, "path", true));
     options.addOption(Option("lua", "l", "Output a Lua script file (default for images; only does one frame)"));
     options.addOption(Option("nfp", "n", "Output an NFP format image for use in paint (changes proportions!)"));
@@ -465,7 +467,7 @@ int main(int argc, const char * argv[]) {
     OptionProcessor argparse(options);
     argparse.setUnixStyle(true);
 
-    std::string input, output, subtitle;
+    std::string input, output, subtitle, format;
     bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false;
     OutputType mode = OutputType::Default;
     int compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
@@ -476,6 +478,7 @@ int main(int argc, const char * argv[]) {
             if (argparse.process(argv[i], option, arg)) {
                 if (option == "input") input = arg;
                 else if (option == "subtitle") subtitle = arg;
+                else if (option == "format") format = arg;
                 else if (option == "output") output = arg;
                 else if (option == "lua") mode = OutputType::Lua;
                 else if (option == "nfp") mode = OutputType::NFP;
@@ -545,13 +548,19 @@ int main(int argc, const char * argv[]) {
 
     AVFormatContext * format_ctx = NULL;
     AVCodecContext * video_codec_ctx = NULL, * audio_codec_ctx = NULL, * dfpwm_codec_ctx = NULL;
+    const AVInputFormat * wanted_format = NULL;
     const AVCodec * video_codec = NULL, * audio_codec = NULL, * dfpwm_codec = NULL;
     SwsContext * resize_ctx = NULL;
     SwrContext * resample_ctx = NULL;
     int error, video_stream = -1, audio_stream = -1;
     std::unordered_multimap<int, ASSSubtitleEvent> subtitles;
     // Open video file
-    if ((error = avformat_open_input(&format_ctx, input.c_str(), NULL, NULL)) < 0) {
+    avdevice_register_all();
+    if (!format.empty()) {
+        wanted_format = av_find_input_format(format.c_str());
+        if (wanted_format == NULL) std::cerr << "Warning: Could not find desired input format '" << format << "', automatically detecting.\n";
+    }
+    if ((error = avformat_open_input(&format_ctx, input.c_str(), wanted_format, NULL)) < 0) {
         std::cerr << "Could not open input file: " << avErrorString(error) << "\n";
         return error;
     }

@@ -30,6 +30,12 @@
     <None Include="raw-player.lua">
       <Filter>Resource Files</Filter>
     </None>
+    <None Include="Makefile.in">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="configure.ac">
+      <Filter>Resource Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\cc-pixel.cpp">
