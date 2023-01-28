@@ -548,7 +548,11 @@ int main(int argc, const char * argv[]) {
 
     AVFormatContext * format_ctx = NULL;
     AVCodecContext * video_codec_ctx = NULL, * audio_codec_ctx = NULL, * dfpwm_codec_ctx = NULL;
+#if LIBAVCODEC_VERSION_MAJOR >= 59
     const AVInputFormat * wanted_format = NULL;
+#else
+    AVInputFormat * wanted_format = NULL;
+#endif
     const AVCodec * video_codec = NULL, * audio_codec = NULL, * dfpwm_codec = NULL;
     SwsContext * resize_ctx = NULL;
     SwrContext * resample_ctx = NULL;
