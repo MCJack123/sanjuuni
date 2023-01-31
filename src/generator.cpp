@@ -19,8 +19,9 @@
  */
 
 #include "sanjuuni.hpp"
-#include <sstream>
 #include <algorithm>
+#include <sstream>
+#include <stack>
 #include <Poco/Base64Encoder.h>
 #include <Poco/Checksum.h>
 
@@ -231,6 +232,10 @@ struct huffman_code {
     huffman_code(uint8_t s, uint8_t b, uint16_t c): symbol(s), bits(b), code(c) {}
 };
 
+static int treeHeight(tree_node * node) {
+    return max(node->left != NULL ? treeHeight(node->left) : 0, node->right != NULL ? treeHeight(node->right) : 0) + 1;
+}
+
 static void loadCodes(tree_node * node, std::vector<huffman_code*>& codes, huffman_code * array, huffman_code partial) {
     if (node->left && node->right) {
         loadCodes(node->left, codes, array, {0, (uint8_t)(partial.bits + 1), (uint16_t)(partial.code << 1)});
@@ -242,7 +247,12 @@ static void loadCodes(tree_node * node, std::vector<huffman_code*>& codes, huffm
     }
 }
 
-struct compare_node {bool operator()(tree_node *a, tree_node *b) {return *a < *b;}};
+struct compare_node {bool operator()(tree_node *a, tree_node *b) {
+    int ah = treeHeight(a), bh = treeHeight(b);
+    if (ah > 14) return true;
+    if (bh > 14) return false;
+    return *a < *b;
+}};
 
 std::string make32vid_cmp(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
     std::string screen, col, pal;
@@ -468,5 +478,5 @@ std::string make32vid_cmp(const uchar * characters, const uchar * colors, const 
 }
 
 std::string makeLuaFile(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
-    return "local image, palette = " + makeTable(characters, colors, palette, width, height) + "\n\nterm.clear()\nfor i,pal in ipairs(palette) do term.setPaletteColor(2^i, table.unpack(pal)) end\nfor y, r in ipairs(image) do\n    term.setCursorPos(1, y)\n    term.blit(table.unpack(r))\nend\nread()\nfor i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.setCursorPos(1, 1)\nterm.clear()\n";
+    return "local image, palette = " + makeTable(characters, colors, palette, width, height) + "\n\nterm.clear()\nfor i = 0, #palette do term.setPaletteColor(2^i, table.unpack(palette[i])) end\nfor y, r in ipairs(image) do\n    term.setCursorPos(1, y)\n    term.blit(table.unpack(r))\nend\nread()\nfor i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.setCursorPos(1, 1)\nterm.clear()\n";
 }

@@ -131,6 +131,7 @@ __kernel void toCCPixel(__global uchar * colors, __global uchar * character, __g
     __private float3 dither_in[6];
     __private uchar dither_out[6];
     for (i = 0; i < 6; i++) {
+        found = false;
         for (j = 0; j < n_used_colors; j++) {
             if (used_colors[j] == colors[i]) {
                 found = true;

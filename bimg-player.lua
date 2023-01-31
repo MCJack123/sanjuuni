@@ -1,6 +1,6 @@
 local path = ...
 if not path then error("Usage: bimg-player <file.bimg>") end
-local file, err = fs.open(shell.resolve(path), "r")
+local file, err = fs.open(shell.resolve(path), "rb")
 if not file then error("Could not open file: " .. err) end
 local img = textutils.unserialize(file.readAll())
 file.close()

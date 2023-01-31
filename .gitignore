@@ -1,7 +1,7 @@
 .vscode
 sanjuuni
 *.exe
-test*
+*test*
 autom4te.cache
 Makefile
 config.*
@@ -15,3 +15,4 @@ vcpkg_installed
 *.32v
 *.bimg
 obj
+un*.lua
