@@ -266,6 +266,7 @@ __kernel void toCCPixel(__global uchar * colors, __global uchar * character, __g
         color_map[bg] = bg;
         /* map other colors to nearest match */
         b[0] = b[1] = 0xFF;
+        found = false;
         for (i = 0; i < 4; i++) {
             if (used_colors[i] != fg && used_colors[i] != bg) {
                 if (!found) {
