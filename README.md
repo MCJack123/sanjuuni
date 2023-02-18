@@ -64,6 +64,7 @@ ComputerCraft.
 -Sfile, --subtitle=file         ASS-formatted subtitle file to add to the video
 -opath, --output=path           Output file path
 -l, --lua                       Output a Lua script file (default for images; only does one frame)
+-n, --nfp                       Output an NFP format image for use in paint (changes proportions!)
 -r, --raw                       Output a rawmode-based image/video file (default for videos)
 -b, --blit-image                Output a blit image (BIMG) format image/animation file
 -3, --32vid                     Output a 32vid format binary video file with compression + audio
@@ -73,11 +74,14 @@ ComputerCraft.
 -T, --streamed                  For servers, encode data on-the-fly instead of doing it ahead of time (saves memory at the cost of speed and only one client)
 -p, --default-palette           Use the default CC palette instead of generating an optimized one
 -t, --threshold                 Use thresholding instead of dithering
+-O, --ordered                   Use ordered dithering
+-L, --lab-color                 Use CIELAB color space for higher quality color conversion
 -8, --octree                    Use octree for higher quality color conversion (slower)
 -k, --kmeans                    Use k-means for highest quality color conversion (slowest)
 -cmode, --compression=mode      Compression type for 32vid videos; available modes: none|lzw|deflate|custom
--L1-9, --compression-level=1-9  Compression level for 32vid videos when using DEFLATE
+-B, --binary                    Output blit image files in a more-compressed binary format (requires opening the file in binary mode)
 -d, --dfpwm                     Use DFPWM compression on audio
+-m, --mute                      Remove audio from output
 -Wsize, --width=size            Resize the image to the specified width
 -Hsize, --height=size           Resize the image to the specified height
 -h, --help                      Show this help

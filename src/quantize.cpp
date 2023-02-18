@@ -22,6 +22,67 @@
 #include "sanjuuni.hpp"
 #include <algorithm>
 
+Mat makeLabImage(const Mat& image) {
+    Mat retval(image.width, image.height);
+    for (int y = 0; y < image.height; y++) {
+        for (int x = 0; x < image.width; x++) {
+            Vec3b pix = image.at(y, x);
+            double r = pix[0] / 255.0, g = pix[1] / 255.0, b = pix[2] / 255.0;
+            if (r > 0.04045) r = pow((r + 0.055) / 1.055, 2.4);
+            else r = r / 12.92;
+            if (g > 0.04045) g = pow((g + 0.055) / 1.055, 2.4);
+            else g = g / 12.92;
+            if (b > 0.04045) b = pow((b + 0.055) / 1.055, 2.4);
+            else b = b / 12.92;
+            r = r * 100; g = g * 100; b = b * 100;
+            double X = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 95.047;
+            double Y = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 100.000;
+            double Z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 108.883;
+            if (X > 0.008856) X = cbrt(X);
+            else X = (7.787 * X) + (16.0 / 116.0);
+            if (Y > 0.008856) Y = cbrt(Y);
+            else Y = (7.787 * Y) + (16.0 / 116.0);
+            if (Z > 0.008856) Z = cbrt(Z);
+            else Z = (7.787 * Z) + (16.0 / 116.0);
+            double L = (116 * Y) - 16, a = 500 * (X - Y) + 128, B = 200 * (Y - Z) + 128;
+            retval.at(y, x) = {L, a, B};
+        }
+    }
+    return retval;
+}
+
+std::vector<Vec3b> convertLabPalette(const std::vector<Vec3b>& palette) {
+    std::vector<Vec3b> pal;
+    for (const Vec3b& color : palette) {
+        double Y = (color[0] + 16.0) / 116.0;
+        double X = (color[1] - 128.0) / 500.0 + Y, Z = Y - (color[2] - 128.0) / 200.0;
+        if (Y*Y*Y > 0.008856) Y = Y*Y*Y;
+        else Y = (Y - 16.0 / 116.0) / 7.787;
+        if (X*X*X > 0.008856) X = X*X*X;
+        else X = (X - 16.0 / 116.0) / 7.787;
+        if (Z*Z*Z > 0.008856) Z = Z*Z*Z;
+        else Z = (Z - 16.0 / 116.0) / 7.787;
+        X *= 0.95047; Z *= 1.08883;
+        double R = X *  3.2406 + Y * -1.5372 + Z * -0.4986;
+        double G = X * -0.9689 + Y *  1.8758 + Z *  0.0415;
+        double B = X *  0.0557 + Y * -0.2040 + Z *  1.0570;
+        if (R > 0.0031308) R = 1.055 * pow(R, 1.0 / 2.4) - 0.055;
+        else R = 12.92 * R;
+        if (G > 0.0031308) G = 1.055 * pow(G, 1.0 / 2.4) - 0.055;
+        else G = 12.92 * G;
+        if (B > 0.0031308) B = 1.055 * pow(B, 1.0 / 2.4) - 0.055;
+        else B = 12.92 * B;
+        if (R < 0) R = 0;
+        if (R > 255) R = 255;
+        if (G < 0) G = 0;
+        if (G > 255) G = 255;
+        if (B < 0) B = 0;
+        if (B > 255) B = 255;
+        pal.push_back(Vec3b{R * 255, G * 255, B * 255});
+    }
+    return pal;
+}
+
 static void medianCut(std::vector<Vec3b>& pal, int num, int lastComponent, std::vector<Vec3b>::iterator res) {
     if (num == 1) {
         Vec3d sum = {0, 0, 0};
@@ -259,6 +320,39 @@ Mat ditherImage(const Mat& image, const std::vector<Vec3b>& palette) {
                 errmap.at(y + 1, x) += err * (5.0/16.0);
                 if (x < image.width - 1) errmap.at(y + 1, x + 1) += err * (1.0/16.0);
             }
+        }
+    }
+    return retval;
+}
+
+static const int thresholdMap[8][8] = {
+    { 0, 32,  8, 40,  2, 34, 10, 42},
+    {48, 16, 56, 24, 50, 18, 58, 26},
+    {12, 44,  4, 36, 14, 46,  6, 38},
+    {60, 28, 52, 20, 62, 30, 54, 22},
+    { 3, 35, 11, 43,  1, 33,  9, 41},
+    {51, 19, 59, 27, 49, 17, 57, 25},
+    {15, 47,  7, 39, 13, 45,  5, 37},
+    {63, 31, 55, 23, 61, 29, 53, 21}
+};
+
+static double colorDistance(const Vec3b& a, const Vec3b& b) {
+    Vec3b c = {b[0] > a[0] ? b[0] - a[0] : a[0] - b[0], b[1] > a[1] ? b[1] - a[1] : a[1] - b[1], b[2] > a[2] ? b[2] - a[2] : a[2] - b[2]};
+    return sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+}
+
+Mat ditherImage_ordered(const Mat& image, const std::vector<Vec3b>& palette) {
+    Mat retval(image.width, image.height);
+    double distance = 0;
+    for (const Vec3b& a : palette)
+        for (const Vec3b& b : palette)
+            distance += colorDistance(a, b);
+    distance /= palette.size() * palette.size() * 6;
+    for (int y = 0; y < image.height; y++) {
+        for (int x = 0; x < image.width; x++) {
+            Vec3d c = Vec3d(image.at(y, x)) + distance * (thresholdMap[y % 8][x % 8] / 64.0 - 0.5);
+            Vec3b newpixel = nearestColor(palette, c);
+            retval.at(y, x) = newpixel;
         }
     }
     return retval;

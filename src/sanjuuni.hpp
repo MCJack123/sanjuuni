@@ -53,6 +53,7 @@ struct Vec3d : public std::array<double, 3> {
     template<typename T> Vec3d(const std::array<T, 3>& a) {(*this)[0] = a[0]; (*this)[1] = a[1]; (*this)[2] = a[2];}
     template<typename T> Vec3d(std::initializer_list<T> il) {(*this)[0] = *(il.begin()); (*this)[1] = *(il.begin()+1); (*this)[2] = *(il.begin()+2);}
     Vec3d operator+(const Vec3d& b) {return {(*this)[0] + b[0], (*this)[1] + b[1], (*this)[2] + b[2]};}
+    Vec3d operator+(double b) {return {(double)(*this)[0] + b, (double)(*this)[1] + b, (double)(*this)[2] + b};}
     Vec3d operator-(const Vec3d& b) {return {(*this)[0] - b[0], (*this)[1] - b[1], (*this)[2] - b[2]};}
     Vec3d operator*(double b) {return {(double)(*this)[0] * b, (double)(*this)[1] * b, (double)(*this)[2] * b};}
     Vec3d operator/(double b) {return {(*this)[0] / b, (*this)[1] / b, (*this)[2] / b};}
@@ -270,6 +271,18 @@ extern std::vector<Vec3b> reducePalette_octree(const Mat& bmp, int numColors);
 
 /* quantize */
 /**
+ * Converts an sRGB image into CIELAB color space.
+ * @param image The image to convert
+ * @return A new image with all pixels in Lab color space
+ */
+extern Mat makeLabImage(const Mat& image);
+/**
+ * Converts a list of Lab colors into sRGB colors.
+ * @param palette The colors to convert
+ * @return A new list with all colors converted to RGB
+ */
+extern std::vector<Vec3b> convertLabPalette(const std::vector<Vec3b>& palette);
+/**
  * Determines the nearest palette color for a color.
  * @param palette The palette to search in
  * @param color The color to match
@@ -306,6 +319,14 @@ extern Mat thresholdImage(const Mat& image, const std::vector<Vec3b>& palette);
  * @return A reduced-color version of the image using the palette
  */
 extern Mat ditherImage(const Mat& image, const std::vector<Vec3b>& palette);
+/**
+ * Reduces the colors in an image using the specified palette through ordered
+ * dithering.
+ * @param image The image to reduce
+ * @param palette The palette to use
+ * @return A reduced-color version of the image using the palette
+ */
+extern Mat ditherImage_ordered(const Mat& image, const std::vector<Vec3b>& palette);
 /**
  * Converts an RGB image into an indexed image using the specified palette. The
  * image must have been reduced before using this function.

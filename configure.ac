@@ -33,7 +33,7 @@ AX_CXX_CHECK_LIB(PocoFoundation, [Poco::ASCIIEncoding], [], [AC_MSG_ERROR([Could
 AX_CXX_CHECK_LIB(PocoUtil, [Poco::Util::Timer], [], [AC_MSG_ERROR([Could not find Poco Util library.])])
 AX_CXX_CHECK_LIB(PocoNet, [Poco::Net::HTTPRequest], [], [AC_MSG_ERROR([Could not find Poco Net library.])])
 AX_CXX_CHECK_LIB(PocoNetSSL, [Poco::Net::HTTPSClientSession], [], [AC_MSG_ERROR([Could not find Poco NetSSL library.])])
-AX_CXX_CHECK_LIB(PocoCrypto, [Poco::Crypto::Cipher], [], [AC_MSG_ERROR([Could not find Poco Crypto library.])])
+AX_CXX_CHECK_LIB(PocoCrypto, [Poco::Crypto::OpenSSLInitializer], [], [AC_MSG_ERROR([Could not find Poco Crypto library.])])
 
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT

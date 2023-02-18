@@ -454,10 +454,11 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("streamed", "T", "For servers, encode data on-the-fly instead of doing it ahead of time (saves memory at the cost of speed, and only one client can connect)"));
     options.addOption(Option("default-palette", "p", "Use the default CC palette instead of generating an optimized one"));
     options.addOption(Option("threshold", "t", "Use thresholding instead of dithering"));
+    options.addOption(Option("ordered", "O", "Use ordered dithering"));
+    options.addOption(Option("lab-color", "L", "Use CIELAB color space for higher quality color conversion"));
     options.addOption(Option("octree", "8", "Use octree for higher quality color conversion (slower)"));
     options.addOption(Option("kmeans", "k", "Use k-means for highest quality color conversion (slowest)"));
     options.addOption(Option("compression", "c", "Compression type for 32vid videos; available modes: none|lzw|deflate|custom", false, "mode", true).validator(new RegExpValidator("^(none|lzw|deflate|custom)$")));
-    options.addOption(Option("compression-level", "L", "Compression level for 32vid videos when using DEFLATE", false, "1-9", true).validator(new IntValidator(1, 9)));
     options.addOption(Option("binary", "B", "Output blit image files in a more-compressed binary format (requires opening the file in binary mode)"));
     options.addOption(Option("dfpwm", "d", "Use DFPWM compression on audio"));
     options.addOption(Option("mute", "m", "Remove audio from output"));
@@ -468,7 +469,7 @@ int main(int argc, const char * argv[]) {
     argparse.setUnixStyle(true);
 
     std::string input, output, subtitle, format;
-    bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false;
+    bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false;
     OutputType mode = OutputType::Default;
     int compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
     int port = 80, width = -1, height = -1, zlibCompression = 5;
@@ -491,6 +492,8 @@ int main(int argc, const char * argv[]) {
                 else if (option == "streamed") streamed = true;
                 else if (option == "default-palette") useDefaultPalette = true;
                 else if (option == "threshold") noDither = true;
+                else if (option == "ordered") ordered = true;
+                else if (option == "lab-color") useLab = true;
                 else if (option == "octree") useOctree = true;
                 else if (option == "kmeans") useKmeans = true;
                 else if (option == "compression") {
@@ -498,7 +501,7 @@ int main(int argc, const char * argv[]) {
                     else if (arg == "lzw") compression = VID32_FLAG_VIDEO_COMPRESSION_LZW;
                     else if (arg == "deflate") compression = VID32_FLAG_VIDEO_COMPRESSION_DEFLATE;
                     else if (arg == "custom") compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
-                } else if (option == "compression-level") zlibCompression = std::stoi(arg);
+                }
                 else if (option == "binary") binary = true;
                 else if (option == "dfpwm") useDFPWM = true;
                 else if (option == "mute") mute = true;
@@ -793,14 +796,17 @@ int main(int argc, const char * argv[]) {
                     for (int x = 0; x < width; x++)
                         rs.at(y, x) = {data[y*width*3+x*3], data[y*width*3+x*3+1], data[y*width*3+x*3+2]};
                 delete[] data;
+                Mat labImage = (!useLab || useDefaultPalette) ? rs : makeLabImage(rs);
                 std::vector<Vec3b> palette;
                 if (useDefaultPalette) palette = defaultPalette;
-                else if (useOctree) palette = reducePalette_octree(rs, 16);
-                else if (useKmeans) palette = reducePalette_kMeans(rs, 16);
-                else palette = reducePalette_medianCut(rs, 16);
-                if (noDither) out = thresholdImage(rs, palette);
-                else out = ditherImage(rs, palette);
+                else if (useOctree) palette = reducePalette_octree(labImage, 16);
+                else if (useKmeans) palette = reducePalette_kMeans(labImage, 16);
+                else palette = reducePalette_medianCut(labImage, 16);
+                if (noDither) out = thresholdImage(labImage, palette);
+                else if (ordered) out = ditherImage_ordered(labImage, palette);
+                else out = ditherImage(labImage, palette);
                 Mat1b pimg = rgbToPaletteImage(out, palette);
+                if (useLab && !useDefaultPalette) palette = convertLabPalette(palette);
                 uchar *characters, *colors;
                 makeCCImage(pimg, palette, &characters, &colors);
                 if (!subtitle.empty() && mode != OutputType::Vid32) renderSubtitles(subtitles, nframe, characters, colors, palette, pimg.width, pimg.height);
