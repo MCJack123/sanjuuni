@@ -67,8 +67,6 @@ void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars,
 #ifdef HAS_OPENCL
     if (device != NULL) {
         try {
-            bzero(*chars, (height / 3) * (width / 2));
-            bzero(*cols, (height / 3) * (width / 2));
             OpenCL::Memory<uchar> colors_mem(*device, height * width / 6, 6, colors);
             OpenCL::Memory<uchar> chars_mem(*device, (height / 3) * (width / 2), 1, *chars);
             OpenCL::Memory<uchar> cols_mem(*device, (height / 3) * (width / 2), 1, *cols);

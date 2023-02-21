@@ -33,13 +33,13 @@
 #include "opencl.hpp"
 #else
 namespace OpenCL {typedef struct Device Device;}
+typedef unsigned int uint;
+typedef unsigned long ulong;
 #endif
 
 /* Type definitions for ComputerCraft character-related code. */
 typedef uint8_t uchar;
 typedef uint16_t ushort;
-typedef unsigned int uint;
-typedef unsigned long ulong;
 typedef struct {
     uchar x;
     uchar y;
