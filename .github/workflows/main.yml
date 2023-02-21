@@ -22,9 +22,9 @@ jobs:
     - name: Make CL code
       shell: wsl-bash {0}
       run: |
-        printf '// Generated automatically; do not edit!\n#include <string>\nnamespace OpenCL {std::string get_opencl_c_code() { return "' > src/cc-pixel-cl.cpp
+        printf '// Generated automatically; do not edit!\n#include <string>\nnamespace OpenCL {std::string get_opencl_c_code() { return ' > src/cc-pixel-cl.cpp
         sed -n -e '/#ifndef OPENCV/{:a; N; /#endif/!ba; d}; s/"/\\"/g; s/^/"/g; s/$/\\n"/g; p' src/cc-pixel.cpp >> src/cc-pixel-cl.cpp
-        echo '";}}' >> src/cc-pixel-cl.cpp
+        echo ';}}' >> src/cc-pixel-cl.cpp
     - name: Build sanjuuni
       run: |
         function Invoke-Environment {
