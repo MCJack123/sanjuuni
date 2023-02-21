@@ -81,6 +81,7 @@ jobs:
           x64\Release\avformat-59.dll
           x64\Release\bz2.dll
           x64\Release\modplug.dll
+          x64\Release\OpenCL.dll
           x64\Release\PocoFoundation.dll
           x64\Release\pcre2-8.dll
           x64\Release\PocoNet.dll
