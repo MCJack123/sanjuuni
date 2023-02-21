@@ -155,6 +155,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\cc-pixel.cpp" />
+    <ClCompile Include="src\cc-pixel-cl.cpp" />
     <ClCompile Include="src\generator.cpp" />
     <ClCompile Include="src\octree.cpp" />
     <ClCompile Include="src\quantize.cpp" />

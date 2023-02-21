@@ -41,14 +41,21 @@ static void makeCCImage_worker(void* s) {
     delete state;
 }
 
-void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols) {
+void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols, OpenCL::Device * device) {
     // Create the input and output data
+    input.download();
     int width = input.width - input.width % 2, height = input.height - input.height % 3;
     uchar * colors = new uchar[height * width];
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x+=2) {
-            if (input[y][x] > 15) throw std::runtime_error("Too many colors (1)");
-            if (input[y][x+1] > 15) throw std::runtime_error("Too many colors (2)");
+            if (input[y][x] > 15) {
+                delete[] colors;
+                throw std::runtime_error("Too many colors (1)");
+            }
+            if (input[y][x+1] > 15) {
+                delete[] colors;
+                throw std::runtime_error("Too many colors (2)");
+            }
             colors[(y-y%3)*width + x*3 + (y%3)*2] = input[y][x];
             colors[(y-y%3)*width + x*3 + (y%3)*2 + 1] = input[y][x+1];
         }
@@ -57,9 +64,36 @@ void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** 
     *cols = new uchar[(height / 3) * (width / 2)];
     uchar3 * pal = new uchar3[16];
     for (int i = 0; i < palette.size() && i < 16; i++) pal[i] = {palette[i][0], palette[i][1], palette[i][2]};
-    for (int i = 0; i < (height / 3) * (width / 2); i++)
-        work.push(makeCCImage_worker, new makeCCImage_state {i, colors, chars, cols, pal});
-    work.wait();
+#ifdef HAS_OPENCL
+    if (device != NULL) {
+        try {
+            bzero(*chars, (height / 3) * (width / 2));
+            bzero(*cols, (height / 3) * (width / 2));
+            OpenCL::Memory<uchar> colors_mem(*device, height * width / 6, 6, colors);
+            OpenCL::Memory<uchar> chars_mem(*device, (height / 3) * (width / 2), 1, *chars);
+            OpenCL::Memory<uchar> cols_mem(*device, (height / 3) * (width / 2), 1, *cols);
+            OpenCL::Memory<uchar> palette_mem(*device, 16, 3, pal);
+            OpenCL::Kernel kernel(*device, height * width / 6, "toCCPixel", colors_mem, chars_mem, cols_mem, palette_mem);
+            kernel.run();
+            chars_mem.read_from_device();
+            cols_mem.read_from_device();
+        } catch (std::exception &e) {
+            delete[] pal;
+            delete[] colors;
+            delete[] *chars;
+            delete[] *cols;
+            *chars = NULL;
+            *cols = NULL;
+            throw e;
+        }
+    } else {
+#endif
+        for (int i = 0; i < (height / 3) * (width / 2); i++)
+            work.push(makeCCImage_worker, new makeCCImage_state {i, colors, chars, cols, pal});
+        work.wait();
+#ifdef HAS_OPENCL
+    }
+#endif
     delete[] pal;
     delete[] colors;
 }
@@ -72,7 +106,7 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
         for (int x = 0; x < width; x++) {
             uchar c = characters[y*width+x], cc = colors[y*width+x];
             if ((binary || (c >= 32 && c < 127)) && c != '"' && c != '\\') text += c;
-            else text += "\\" + std::to_string(c);
+            else text += (c < 10 ? "\\00" : (c < 100 ? "\\0" : "\\")) + std::to_string(c);
             fg += hexstr[cc & 0xf];
             bg += hexstr[cc >> 4];
         }

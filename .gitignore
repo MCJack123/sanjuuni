@@ -16,3 +16,4 @@ vcpkg_installed
 *.bimg
 obj
 un*.lua
+src/cc-pixel-cl.cpp

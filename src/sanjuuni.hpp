@@ -29,6 +29,12 @@
 #include <functional>
 #include <atomic>
 
+#ifdef HAS_OPENCL
+#include "opencl.hpp"
+#else
+namespace OpenCL {typedef struct Device Device;}
+#endif
+
 /* Type definitions for ComputerCraft character-related code. */
 typedef uint8_t uchar;
 typedef uint16_t ushort;
@@ -50,20 +56,23 @@ typedef struct {
 /* Type definitions for quantization code. */
 struct Vec3d : public std::array<double, 3> {
     Vec3d() = default;
+    Vec3d(const uchar3& a) {(*this)[0] = a.x; (*this)[1] = a.y; (*this)[2] = a.z;}
     template<typename T> Vec3d(const std::array<T, 3>& a) {(*this)[0] = a[0]; (*this)[1] = a[1]; (*this)[2] = a[2];}
     template<typename T> Vec3d(std::initializer_list<T> il) {(*this)[0] = *(il.begin()); (*this)[1] = *(il.begin()+1); (*this)[2] = *(il.begin()+2);}
-    Vec3d operator+(const Vec3d& b) {return {(*this)[0] + b[0], (*this)[1] + b[1], (*this)[2] + b[2]};}
-    Vec3d operator+(double b) {return {(double)(*this)[0] + b, (double)(*this)[1] + b, (double)(*this)[2] + b};}
-    Vec3d operator-(const Vec3d& b) {return {(*this)[0] - b[0], (*this)[1] - b[1], (*this)[2] - b[2]};}
-    Vec3d operator*(double b) {return {(double)(*this)[0] * b, (double)(*this)[1] * b, (double)(*this)[2] * b};}
-    Vec3d operator/(double b) {return {(*this)[0] / b, (*this)[1] / b, (*this)[2] / b};}
+    Vec3d operator+(const Vec3d& b) const {return {(*this)[0] + b[0], (*this)[1] + b[1], (*this)[2] + b[2]};}
+    Vec3d operator+(double b) const {return {(double)(*this)[0] + b, (double)(*this)[1] + b, (double)(*this)[2] + b};}
+    Vec3d operator-(const Vec3d& b) const {return {(*this)[0] - b[0], (*this)[1] - b[1], (*this)[2] - b[2]};}
+    Vec3d operator*(double b) const {return {(double)(*this)[0] * b, (double)(*this)[1] * b, (double)(*this)[2] * b};}
+    Vec3d operator/(double b) const {return {(*this)[0] / b, (*this)[1] / b, (*this)[2] / b};}
     Vec3d& operator+=(const Vec3d& a) {(*this)[0] += a[0]; (*this)[1] += a[1]; (*this)[2] += a[2]; return *this;}
 };
 
 struct Vec3b : public std::array<uint8_t, 3> {
     Vec3b() = default;
+    Vec3b(const uchar3& a) {(*this)[0] = a.x; (*this)[1] = a.y; (*this)[2] = a.z;}
     template<typename T> Vec3b(const std::array<T, 3>& a) {(*this)[0] = a[0]; (*this)[1] = a[1]; (*this)[2] = a[2];}
     template<typename T> Vec3b(std::initializer_list<T> il) {(*this)[0] = *(il.begin()); (*this)[1] = *(il.begin()+1); (*this)[2] = *(il.begin()+2);}
+    operator uchar3() const {return {(*this)[0], (*this)[1], (*this)[2]};}
 };
 
 template<typename T>
@@ -72,6 +81,10 @@ public:
     unsigned width;
     unsigned height;
     std::vector<T> vec;
+#ifdef HAS_OPENCL
+    std::shared_ptr<OpenCL::Memory<T>> mem;
+#endif
+    bool onHost = true, onDevice = true;
     class row {
         std::vector<T> * vec;
         unsigned ypos;
@@ -100,6 +113,11 @@ public:
     };
     vector2d(): width(0), height(0), vec() {}
     vector2d(unsigned w, unsigned h, T v = T()): width(w), height(h), vec((size_t)w*h, v) {}
+    vector2d(unsigned w, unsigned h, OpenCL::Device * dev, T v = T()): width(w), height(h), vec((size_t)w*h, v) {
+#ifdef HAS_OPENCL
+        if (dev != NULL) mem = std::make_shared<OpenCL::Memory<T>>(*dev, w * h, 1, vec.data());
+#endif
+    }
     row operator[](unsigned idx) {
         if (idx >= height) throw std::out_of_range("Vector2D index out of range");
         return row(&vec, idx * width, width);
@@ -115,6 +133,19 @@ public:
     const T& at(unsigned y, unsigned x) const {
         if (y >= height || x >= width) throw std::out_of_range("Vector2D index out of range");
         return vec[y*width+x];
+    }
+    void remove_last_line() {vec.resize(width*--height);}
+    void download() {
+#ifdef HAS_OPENCL
+        if (mem != NULL && !onHost) mem->read_from_device();
+#endif
+        onHost = true;
+    }
+    void upload() {
+#ifdef HAS_OPENCL
+        if (mem != NULL && !onDevice) mem->write_to_device();
+#endif
+        onDevice = true;
     }
 };
 
@@ -178,7 +209,7 @@ public:
 };
 
 typedef vector2d<uint8_t> Mat1b;
-typedef vector2d<Vec3b> Mat;
+typedef vector2d<uchar3> Mat;
 #undef min
 #undef max
 template<typename T> inline T min(T a, T b) {return a < b ? a : b;}
@@ -258,7 +289,7 @@ extern WorkQueue work;
  * @param color A pointer to the resulting color pair
  * @param palette A 16-long array of colors in the palette
  */
-extern void toCCPixel(uchar * colors, uchar * character, uchar * color, uchar3 * palette);
+extern void toCCPixel(uchar * colors, uchar * character, uchar * color, const uchar3 * palette);
 
 /* octree */
 /**
@@ -267,7 +298,7 @@ extern void toCCPixel(uchar * colors, uchar * character, uchar * color, uchar3 *
  * @param numColors The number of colors to get
  * @return An optimized palette for the image
  */
-extern std::vector<Vec3b> reducePalette_octree(const Mat& bmp, int numColors);
+extern std::vector<Vec3b> reducePalette_octree(Mat& bmp, int numColors, OpenCL::Device * device = NULL);
 
 /* quantize */
 /**
@@ -275,7 +306,7 @@ extern std::vector<Vec3b> reducePalette_octree(const Mat& bmp, int numColors);
  * @param image The image to convert
  * @return A new image with all pixels in Lab color space
  */
-extern Mat makeLabImage(const Mat& image);
+extern Mat makeLabImage(Mat& image, OpenCL::Device * device = NULL);
 /**
  * Converts a list of Lab colors into sRGB colors.
  * @param palette The colors to convert
@@ -296,21 +327,21 @@ extern Vec3b nearestColor(const std::vector<Vec3b>& palette, const Vec3d& color,
  * @param numColors The number of colors to get (must be a power of 2)
  * @return An optimized palette for the image
  */
-extern std::vector<Vec3b> reducePalette_medianCut(const Mat& image, int numColors);
+extern std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::Device * device = NULL);
 /**
  * Generates an optimized palette for an image using the k-means algorithm.
  * @param iamge The image to generate a palette for
  * @param numColors The number of colors to get
  * @return An optimized palette for the image
  */
-extern std::vector<Vec3b> reducePalette_kMeans(const Mat& image, int numColors);
+extern std::vector<Vec3b> reducePalette_kMeans(Mat& image, int numColors, OpenCL::Device * device = NULL);
 /**
  * Reduces the colors in an image using the specified palette through thresholding.
  * @param image The image to reduce
  * @param palette The palette to use
  * @return A reduced-color version of the image using the palette
  */
-extern Mat thresholdImage(const Mat& image, const std::vector<Vec3b>& palette);
+extern Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device = NULL);
 /**
  * Reduces the colors in an image using the specified palette through Floyd-
  * Steinberg dithering.
@@ -318,7 +349,7 @@ extern Mat thresholdImage(const Mat& image, const std::vector<Vec3b>& palette);
  * @param palette The palette to use
  * @return A reduced-color version of the image using the palette
  */
-extern Mat ditherImage(const Mat& image, const std::vector<Vec3b>& palette);
+extern Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device = NULL);
 /**
  * Reduces the colors in an image using the specified palette through ordered
  * dithering.
@@ -326,7 +357,7 @@ extern Mat ditherImage(const Mat& image, const std::vector<Vec3b>& palette);
  * @param palette The palette to use
  * @return A reduced-color version of the image using the palette
  */
-extern Mat ditherImage_ordered(const Mat& image, const std::vector<Vec3b>& palette);
+extern Mat ditherImage_ordered(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device = NULL);
 /**
  * Converts an RGB image into an indexed image using the specified palette. The
  * image must have been reduced before using this function.
@@ -334,7 +365,7 @@ extern Mat ditherImage_ordered(const Mat& image, const std::vector<Vec3b>& palet
  * @param palette The palette for the image
  * @return An indexed version of the image
  */
-extern Mat1b rgbToPaletteImage(const Mat& image, const std::vector<Vec3b>& palette);
+extern Mat1b rgbToPaletteImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device = NULL);
 
 /* generator */
 /**
@@ -346,7 +377,7 @@ extern Mat1b rgbToPaletteImage(const Mat& image, const std::vector<Vec3b>& palet
  * @param cols A pointer to the destination color pair array pointer - this must
  * be freed with `delete[]` once finished
  */
-extern void makeCCImage(const Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols);
+extern void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols, OpenCL::Device * device = NULL);
 /**
  * Generates a blit table from the specified CC image.
  * @param characters The character array to use

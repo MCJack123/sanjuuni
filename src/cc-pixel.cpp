@@ -18,25 +18,39 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#ifndef OPENCV
 #include "sanjuuni.hpp"
 
 // OpenCL polyfills
 #define __global
 #define __local
-#define __constant constexpr
+#define __constant const
 #define __private
 #define __kernel
+#define __read_only 
+#define __write_only
+#define get_global_id(n) 0
+#define get_group_id(n) 0
+#define get_local_id(n) 0
+#define barrier(n) ((void)0)
+#define vload3(n, data) (uchar3){data[(n)*3], data[(n)*3+1], data[(n)*3+2]}
+#define vstore3(v, n, data) {data[(n)*3] = (v).x; data[(n)*3+1] = (v).y; data[(n)*3+2] = (v).z;}
+#define CLK_LOCAL_MEM_FENCE 0
 
 static float distance(float3 p0, float3 p1) {return sqrt((p1.x - p0.x)*(p1.x - p0.x) + (p1.y - p0.y)*(p1.y - p0.y) + (p1.z - p0.z)*(p1.z - p0.z));}
 float3 operator-(const float3& a, const float3& b) {return {a.x - b.x, a.y - b.y, a.z - b.z};}
 float3& operator+=(float3& a, const float3& b) {a.x += b.x; a.y += b.y; a.z += b.z; return a;}
+float3& operator+=(float3& a, float b) {a.x += b; a.y += b; a.z += b; return a;}
 float3 operator*(const float3& v, float s) {return {v.x * s, v.y * s, v.z * s};}
 int operator==(const float3& a, const float3& b) {return a.x == b.x && a.y == b.y && a.z == b.z;}
+#endif
 
 /* OpenCL-compatible C to be able to copy straight to OpenCL */
 /* can't use external functions besides what CLC provides */
 
-uchar getComponent(__private uchar3 c, __private int cmp) {
+__constant uint MAX_LOCAL_SIZE = 256;
+
+static uchar getComponent(__private uchar3 c, __private int cmp) {
     switch (cmp) {
         case 0: return c.x;
         case 1: return c.y;
@@ -46,7 +60,7 @@ uchar getComponent(__private uchar3 c, __private int cmp) {
 }
 
 /* unrolled Floyd-Steinberg dithering */
-void ditherCCImage(__private float3 * img, __private float3 a, __private float3 b, __private uchar ac, __private uchar bc, __private uchar * out) {
+static void ditherCCImage(__private float3 * img, __private float3 a, __private float3 b, __private uchar ac, __private uchar bc, __private uchar * out) {
     __private float3 err;
     /* 0, 0 */
     if (distance(img[0], a) < distance(img[0], b)) {
@@ -56,9 +70,9 @@ void ditherCCImage(__private float3 * img, __private float3 a, __private float3 
         err = img[0] - b;
         img[0] = b;
     }
-    img[1] += err * (7.0/16.0);
-    img[2] += err * (5.0/16.0);
-    img[3] += err * (1.0/16.0);
+    img[1] += err * (7.0f/16.0f);
+    img[2] += err * (5.0f/16.0f);
+    img[3] += err * (1.0f/16.0f);
     /* 1, 0 */
     if (distance(img[1], a) < distance(img[1], b)) {
         err = img[1] - a;
@@ -67,8 +81,8 @@ void ditherCCImage(__private float3 * img, __private float3 a, __private float3 
         err = img[1] - b;
         img[1] = b;
     }
-    img[2] += err * (3.0/16.0);
-    img[3] += err * (5.0/16.0);
+    img[2] += err * (3.0f/16.0f);
+    img[3] += err * (5.0f/16.0f);
     /* 0, 1 */
     if (distance(img[2], a) < distance(img[2], b)) {
         err = img[2] - a;
@@ -77,9 +91,9 @@ void ditherCCImage(__private float3 * img, __private float3 a, __private float3 
         err = img[2] - b;
         img[2] = b;
     }
-    img[3] += err * (7.0/16.0);
-    img[4] += err * (5.0/16.0);
-    img[5] += err * (1.0/16.0);
+    img[3] += err * (7.0f/16.0f);
+    img[4] += err * (5.0f/16.0f);
+    img[5] += err * (1.0f/16.0f);
     /* 1, 1 */
     if (distance(img[3], a) < distance(img[3], b)) {
         err = img[3] - a;
@@ -88,8 +102,8 @@ void ditherCCImage(__private float3 * img, __private float3 a, __private float3 
         err = img[3] - b;
         img[3] = b;
     }
-    img[4] += err * (3.0/16.0);
-    img[5] += err * (5.0/16.0);
+    img[4] += err * (3.0f/16.0f);
+    img[5] += err * (5.0f/16.0f);
     /* 0, 2 */
     if (distance(img[4], a) < distance(img[4], b)) {
         err = img[4] - a;
@@ -98,7 +112,7 @@ void ditherCCImage(__private float3 * img, __private float3 a, __private float3 
         err = img[4] - b;
         img[4] = b;
     }
-    img[5] += err * (7.0/16.0);
+    img[5] += err * (7.0f/16.0f);
     /* 1, 2 */
     if (distance(img[5], a) < distance(img[5], b)) {
         err = img[5] - a;
@@ -108,16 +122,16 @@ void ditherCCImage(__private float3 * img, __private float3 a, __private float3 
         img[5] = b;
     }
     /* generate image */
-    if (img[0] == a) out[0] = ac; else out[0] = bc;
-    if (img[1] == a) out[1] = ac; else out[1] = bc;
-    if (img[2] == a) out[2] = ac; else out[2] = bc;
-    if (img[3] == a) out[3] = ac; else out[3] = bc;
-    if (img[4] == a) out[4] = ac; else out[4] = bc;
-    if (img[5] == a) out[5] = ac; else out[5] = bc;
+    if (img[0].x == a.x && img[0].y == a.y && img[0].z == a.z) out[0] = ac; else out[0] = bc;
+    if (img[1].x == a.x && img[1].y == a.y && img[1].z == a.z) out[1] = ac; else out[1] = bc;
+    if (img[2].x == a.x && img[2].y == a.y && img[2].z == a.z) out[2] = ac; else out[2] = bc;
+    if (img[3].x == a.x && img[3].y == a.y && img[3].z == a.z) out[3] = ac; else out[3] = bc;
+    if (img[4].x == a.x && img[4].y == a.y && img[4].z == a.z) out[4] = ac; else out[4] = bc;
+    if (img[5].x == a.x && img[5].y == a.y && img[5].z == a.z) out[5] = ac; else out[5] = bc;
 }
 
 /* character: high byte = bg << 4 | fg, low byte = char */
-__kernel void toCCPixel(__global uchar * colors, __global uchar * character, __global uchar * color, __global uchar3 * palette) {
+__kernel void toCCPixel(__global uchar * colors, __global uchar * character, __global uchar * color, __constant uchar3 * palette) {
     __private uchar used_colors[6];
     __private int n_used_colors = 0;
     __private int i, j, tmp, maxComponent;
@@ -130,6 +144,9 @@ __kernel void toCCPixel(__global uchar * colors, __global uchar * character, __g
     __private float3 palf[4];
     __private float3 dither_in[6];
     __private uchar dither_out[6];
+    colors += get_global_id(0) * 6;
+    character += get_global_id(0);
+    color += get_global_id(0);
     for (i = 0; i < 6; i++) {
         found = false;
         for (j = 0; j < n_used_colors; j++) {
@@ -334,5 +351,86 @@ __kernel void toCCPixel(__global uchar * colors, __global uchar * character, __g
         *character = ch;
         *color = fg | (bg << 4);
         break;
+    }
+}
+
+__kernel void toLab(__global const uchar * image, __global uchar * output) {
+    __private float r = image[get_global_id(0)*3] / 255.0, g = image[get_global_id(0)*3+1] / 255.0, b = image[get_global_id(0)*3+2] / 255.0;
+    __private float X, Y, Z, L, a, B;
+    if (r > 0.04045) r = pow((r + 0.055) / 1.055, 2.4);
+    else r = r / 12.92;
+    if (g > 0.04045) g = pow((g + 0.055) / 1.055, 2.4);
+    else g = g / 12.92;
+    if (b > 0.04045) b = pow((b + 0.055) / 1.055, 2.4);
+    else b = b / 12.92;
+    r = r * 100; g = g * 100; b = b * 100;
+    X = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 95.047;
+    Y = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 100.000;
+    Z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 108.883;
+    if (X > 0.008856) X = cbrt(X);
+    else X = (7.787 * X) + (16.0 / 116.0);
+    if (Y > 0.008856) Y = cbrt(Y);
+    else Y = (7.787 * Y) + (16.0 / 116.0);
+    if (Z > 0.008856) Z = cbrt(Z);
+    else Z = (7.787 * Z) + (16.0 / 116.0);
+    L = (116 * Y) - 16; a = 500 * (X - Y) + 128; B = 200 * (Y - Z) + 128;
+    output[get_global_id(0)*3] = L; output[get_global_id(0)*3+1] = a; output[get_global_id(0)*3+2] = B;
+}
+
+__kernel void thresholdKernel(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size) {
+    __private float3 pix, col;
+    __private uchar i;
+    __private float3 closest;
+    __private float dist;
+    pix.x = image[get_global_id(0)*3]; pix.y = image[get_global_id(0)*3+1]; pix.z = image[get_global_id(0)*3+2];
+    closest.x = palette[0]; closest.y = palette[1]; closest.z = palette[2];
+    dist = distance(pix, closest);
+    for (i = 1; i < palette_size; i++) {
+        col.x = palette[i*3]; col.y = palette[i*3+1]; col.z = palette[i*3+2];
+        if (distance(pix, col) < dist) {
+            closest = col;
+            dist = distance(pix, col);
+        }
+    }
+    output[get_global_id(0)*3] = closest.x; output[get_global_id(0)*3+1] = closest.y; output[get_global_id(0)*3+2] = closest.z;
+}
+
+static __constant int thresholdMap[8][8] = {
+    { 0, 32,  8, 40,  2, 34, 10, 42},
+    {48, 16, 56, 24, 50, 18, 58, 26},
+    {12, 44,  4, 36, 14, 46,  6, 38},
+    {60, 28, 52, 20, 62, 30, 54, 22},
+    { 3, 35, 11, 43,  1, 33,  9, 41},
+    {51, 19, 59, 27, 49, 17, 57, 25},
+    {15, 47,  7, 39, 13, 45,  5, 37},
+    {63, 31, 55, 23, 61, 29, 53, 21}
+};
+
+__kernel void orderedDither(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size, ulong width, double factor) {
+    __private float3 pix, col;
+    __private uchar i;
+    __private float3 closest;
+    __private float dist;
+    pix.x = image[get_global_id(0)*3]; pix.y = image[get_global_id(0)*3+1]; pix.z = image[get_global_id(0)*3+2];
+    pix += (float)factor * (thresholdMap[(get_global_id(0) / width) % 8][(get_global_id(0) % width) % 8] / 64.0f - 0.5f);
+    closest.x = palette[0]; closest.y = palette[1]; closest.z = palette[2];
+    dist = distance(pix, closest);
+    for (i = 1; i < palette_size; i++) {
+        col.x = palette[i*3]; col.y = palette[i*3+1]; col.z = palette[i*3+2];
+        if (distance(pix, col) < dist) {
+            closest = col;
+            dist = distance(pix, col);
+        }
+    }
+    output[get_global_id(0)*3] = closest.x; output[get_global_id(0)*3+1] = closest.y; output[get_global_id(0)*3+2] = closest.z;
+}
+
+__kernel void rgbToPaletteKernel(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size) {
+    __private uchar i;
+    for (i = 0; i < palette_size; i++) {
+        if (image[get_global_id(0)*3] == palette[i*3] && image[get_global_id(0)*3+1] == palette[i*3+1] && image[get_global_id(0)*3+2] == palette[i*3+2]) {
+            output[get_global_id(0)] = i;
+            return;
+        }
     }
 }

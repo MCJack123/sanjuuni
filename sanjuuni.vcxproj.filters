@@ -41,6 +41,9 @@
     <ClCompile Include="src\cc-pixel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\cc-pixel-cl.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\generator.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

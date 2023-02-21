@@ -333,8 +333,10 @@ std::unordered_multimap<int, ASSSubtitleEvent> parseASSSubtitles(const std::stri
         int space;
         for (space = 0; isspace(data[space]); space++);
         if (space) data = data.substr(space);
+        if (data.empty()) continue;
         for (space = data.size() - 1; isspace(data[space]); space--);
         if (space < data.size() - 1) data = data.substr(0, space + 1);
+        if (data.empty()) continue;
         if (type == "ScriptType") isASS = data == "v4.00+" || data == "V4.00+";
         else if (type == "PlayResX") width = std::stoul(data);
         else if (type == "PlayResY") height = std::stoul(data);
@@ -561,6 +563,7 @@ int main(int argc, const char * argv[]) {
     SwrContext * resample_ctx = NULL;
     int error, video_stream = -1, audio_stream = -1;
     std::unordered_multimap<int, ASSSubtitleEvent> subtitles;
+    OpenCL::Device * device = NULL;
     // Open video file
     avdevice_register_all();
     if (!format.empty()) {
@@ -747,6 +750,38 @@ int main(int argc, const char * argv[]) {
         }
     }
 
+#ifdef HAS_OPENCL
+    try {
+        device = new OpenCL::Device(OpenCL::select_device_with_most_flops());
+        /*Mat testImage(2, 2, device);
+        testImage.at(0, 0) = {255, 0, 0};
+        testImage.at(0, 1) = {255, 255, 0};
+        testImage.at(1, 0) = {0, 255, 0};
+        testImage.at(1, 1) = {0, 0, 255};
+        Mat expected = ditherImage_ordered(testImage, {{255, 192, 128}, {0, 64, 96}}, NULL);
+        Mat actual = ditherImage_ordered(testImage, {{255, 192, 128}, {0, 64, 96}}, device);
+        printf("%d %d %d => %d %d %d / %d %d %d\n",
+            testImage.at(0, 0).x, testImage.at(0, 0).y, testImage.at(0, 0).z,
+            expected.at(0, 0).x, expected.at(0, 0).y, expected.at(0, 0).z,
+            actual.at(0, 0).x, actual.at(0, 0).y, actual.at(0, 0).z);
+        printf("%d %d %d => %d %d %d / %d %d %d\n",
+            testImage.at(0, 1).x, testImage.at(0, 1).y, testImage.at(0, 1).z,
+            expected.at(0, 1).x, expected.at(0, 1).y, expected.at(0, 1).z,
+            actual.at(0, 1).x, actual.at(0, 1).y, actual.at(0, 1).z);
+        printf("%d %d %d => %d %d %d / %d %d %d\n",
+            testImage.at(1, 0).x, testImage.at(1, 0).y, testImage.at(1, 0).z,
+            expected.at(1, 0).x, expected.at(1, 0).y, expected.at(1, 0).z,
+            actual.at(1, 0).x, actual.at(1, 0).y, actual.at(1, 0).z);
+        printf("%d %d %d => %d %d %d / %d %d %d\n",
+            testImage.at(1, 1).x, testImage.at(1, 1).y, testImage.at(1, 1).z,
+            expected.at(1, 1).x, expected.at(1, 1).y, expected.at(1, 1).z,
+            actual.at(1, 1).x, actual.at(1, 1).y, actual.at(1, 1).z);*/
+    } catch (std::exception &e) {
+        std::cerr << "Warning: Could not open OpenCL device: " << e.what() << ". Falling back to CPU computation.\n";
+        device = NULL;
+    }
+#endif
+
 #ifdef USE_SDL
     SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
     SDL_Init(SDL_INIT_VIDEO);
@@ -787,28 +822,25 @@ int main(int argc, const char * argv[]) {
                     }
                     resize_ctx = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format, width, height, AV_PIX_FMT_BGR24, SWS_BICUBIC, NULL, NULL, NULL);
                 }
-                Mat rs(width, height);
-                uint8_t * data = new uint8_t[width * height * 4];
+                Mat rs(width, height+1, device);
+                uint8_t * data = (uint8_t*)rs.vec.data();
                 int stride[3] = {width * 3, width * 3, width * 3};
                 uint8_t * ptrs[3] = {data, data + 1, data + 2};
                 sws_scale(resize_ctx, frame->data, frame->linesize, 0, frame->height, ptrs, stride);
-                for (int y = 0; y < height; y++)
-                    for (int x = 0; x < width; x++)
-                        rs.at(y, x) = {data[y*width*3+x*3], data[y*width*3+x*3+1], data[y*width*3+x*3+2]};
-                delete[] data;
-                Mat labImage = (!useLab || useDefaultPalette) ? rs : makeLabImage(rs);
+                rs.remove_last_line();
+                Mat labImage = (!useLab || useDefaultPalette) ? rs : makeLabImage(rs, device);
                 std::vector<Vec3b> palette;
                 if (useDefaultPalette) palette = defaultPalette;
                 else if (useOctree) palette = reducePalette_octree(labImage, 16);
                 else if (useKmeans) palette = reducePalette_kMeans(labImage, 16);
                 else palette = reducePalette_medianCut(labImage, 16);
-                if (noDither) out = thresholdImage(labImage, palette);
-                else if (ordered) out = ditherImage_ordered(labImage, palette);
-                else out = ditherImage(labImage, palette);
-                Mat1b pimg = rgbToPaletteImage(out, palette);
+                if (noDither) out = thresholdImage(labImage, palette, device);
+                else if (ordered) out = ditherImage_ordered(labImage, palette, device);
+                else out = ditherImage(labImage, palette, device);
+                Mat1b pimg = rgbToPaletteImage(out, palette, device);
                 if (useLab && !useDefaultPalette) palette = convertLabPalette(palette);
                 uchar *characters, *colors;
-                makeCCImage(pimg, palette, &characters, &colors);
+                makeCCImage(pimg, palette, &characters, &colors, device);
                 if (!subtitle.empty() && mode != OutputType::Vid32) renderSubtitles(subtitles, nframe, characters, colors, palette, pimg.width, pimg.height);
                 switch (mode) {
                 case OutputType::Lua: {
@@ -979,6 +1011,9 @@ cleanup:
     STATUS_FUNCTION(nframe, format_ctx->streams[video_stream]->nb_frames, duration_cast<milliseconds>(t), milliseconds(0), t >= seconds(1) ? floor((double)nframe / duration_cast<seconds>(t).count()) : 0);
 #else
     std::cerr << "\rframe " << nframe << "/" << format_ctx->streams[video_stream]->nb_frames << " (elapsed " << t << ", remaining 00:00, " << floor((double)nframe / duration_cast<seconds>(t).count()) << " fps)\n";
+#endif
+#ifdef HAS_OPENCL
+    if (device != NULL) delete device;
 #endif
     if (outfile.is_open()) outfile.close();
     if (resize_ctx) sws_freeContext(resize_ctx);

@@ -221,7 +221,7 @@ static void octree_free_node(struct octree_node* node) {
     free(node);
 }
 
-std::vector<Vec3b> reducePalette_octree(const Mat& bmp, int numColors) {
+std::vector<Vec3b> reducePalette_octree(Mat& bmp, int numColors, OpenCL::Device * device) {
     int x, y;
     int i;
     int bpp;
@@ -230,6 +230,7 @@ std::vector<Vec3b> reducePalette_octree(const Mat& bmp, int numColors) {
     octree_tree _tree;
     octree_tree * tree = &_tree;
 
+    bmp.download();
     tree->number_of_leaves = 0;
     tree->root = octree_create_node(0);
     tree->leaves_parents = 0;
@@ -239,7 +240,7 @@ std::vector<Vec3b> reducePalette_octree(const Mat& bmp, int numColors) {
 
     for (y = 0; y < bmp.height; y++) {
         for (x = 0; x < bmp.width; x++) {
-            if (!octree_insert_pixel(tree, bmp[y][x][0], bmp[y][x][1], bmp[y][x][2])) {
+            if (!octree_insert_pixel(tree, bmp[y][x].x, bmp[y][x].y, bmp[y][x].z)) {
                 octree_free_node(tree->root);
                 return {};
             }

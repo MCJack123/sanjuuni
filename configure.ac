@@ -20,6 +20,7 @@ AC_CHECK_HEADERS([Poco/Util/OptionProcessor.h], [], [AC_MSG_ERROR([Could not fin
 AC_CHECK_HEADERS([Poco/Net/HTTPServer.h], [], [AC_MSG_ERROR([Could not find Poco Net headers.])])
 AC_CHECK_HEADERS([Poco/Net/HTTPSClientSession.h], [], [AC_MSG_ERROR([Could not find Poco NetSSL headers.])])
 AC_CHECK_HEADERS([Poco/Crypto/X509Certificate.h], [], [AC_MSG_ERROR([Could not find Poco Crypto headers.])])
+AC_CHECK_HEADERS([CL/opencl.hpp], [], [HAS_OPENCL=0])
 
 AC_SEARCH_LIBS(pthread_create, pthread, [], [AC_MSG_ERROR([Could not find pthread library.])])
 AC_SEARCH_LIBS(avcodec_find_decoder, avcodec, [], [AC_MSG_ERROR([Could not find libavcodec library.])])
@@ -34,6 +35,10 @@ AX_CXX_CHECK_LIB(PocoUtil, [Poco::Util::Timer], [], [AC_MSG_ERROR([Could not fin
 AX_CXX_CHECK_LIB(PocoNet, [Poco::Net::HTTPRequest], [], [AC_MSG_ERROR([Could not find Poco Net library.])])
 AX_CXX_CHECK_LIB(PocoNetSSL, [Poco::Net::HTTPSClientSession], [], [AC_MSG_ERROR([Could not find Poco NetSSL library.])])
 AX_CXX_CHECK_LIB(PocoCrypto, [Poco::Crypto::OpenSSLInitializer], [], [AC_MSG_ERROR([Could not find Poco Crypto library.])])
+if test "x$HAS_OPENCL" != "x0"; then
+    AC_SEARCH_LIBS(clCreateContext, OpenCL, [HAS_OPENCL=1], [HAS_OPENCL=0])
+fi
+if test "x$HAS_OPENCL" = "x1"; then CPPFLAGS="$CPPFLAGS -DHAS_OPENCL"; fi
 
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT

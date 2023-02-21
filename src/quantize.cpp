@@ -22,32 +22,28 @@
 #include "sanjuuni.hpp"
 #include <algorithm>
 
-Mat makeLabImage(const Mat& image) {
-    Mat retval(image.width, image.height);
-    for (int y = 0; y < image.height; y++) {
-        for (int x = 0; x < image.width; x++) {
-            Vec3b pix = image.at(y, x);
-            double r = pix[0] / 255.0, g = pix[1] / 255.0, b = pix[2] / 255.0;
-            if (r > 0.04045) r = pow((r + 0.055) / 1.055, 2.4);
-            else r = r / 12.92;
-            if (g > 0.04045) g = pow((g + 0.055) / 1.055, 2.4);
-            else g = g / 12.92;
-            if (b > 0.04045) b = pow((b + 0.055) / 1.055, 2.4);
-            else b = b / 12.92;
-            r = r * 100; g = g * 100; b = b * 100;
-            double X = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 95.047;
-            double Y = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 100.000;
-            double Z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 108.883;
-            if (X > 0.008856) X = cbrt(X);
-            else X = (7.787 * X) + (16.0 / 116.0);
-            if (Y > 0.008856) Y = cbrt(Y);
-            else Y = (7.787 * Y) + (16.0 / 116.0);
-            if (Z > 0.008856) Z = cbrt(Z);
-            else Z = (7.787 * Z) + (16.0 / 116.0);
-            double L = (116 * Y) - 16, a = 500 * (X - Y) + 128, B = 200 * (Y - Z) + 128;
-            retval.at(y, x) = {L, a, B};
+extern void toLab(const uchar * image, uchar * output);
+
+Mat makeLabImage(Mat& image, OpenCL::Device * device) {
+    Mat retval(image.width, image.height, device);
+#ifdef HAS_OPENCL
+    if (device != NULL) {
+        image.upload();
+        OpenCL::Kernel kernel(*device, image.width * image.height, "toLab", *image.mem, *retval.mem);
+        kernel.run();
+        retval.onHost = false;
+    } else {
+#endif
+        image.download();
+        retval.onDevice = false;
+        for (int y = 0; y < image.height; y++) {
+            for (int x = 0; x < image.width; x++) {
+                toLab((uchar*)(image.vec.data() + y * image.width + x), (uchar*)(retval.vec.data() + y * image.width + x));
+            }
         }
+#ifdef HAS_OPENCL
     }
+#endif
     return retval;
 }
 
@@ -112,9 +108,10 @@ static void medianCut(std::vector<Vec3b>& pal, int num, int lastComponent, std::
     }
 }
 
-std::vector<Vec3b> reducePalette_medianCut(const Mat& image, int numColors) {
+std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::Device * device) {
     int e = 0;
     if (frexp(numColors, &e) > 0.5) throw std::invalid_argument("color count must be a power of 2");
+    image.download();
     std::vector<Vec3b> pal;
     for (int y = 0; y < image.height; y++)
         for (int x = 0; x < image.width; x++)
@@ -194,7 +191,7 @@ static void kMeans_recenter(void* s) {
     (*state->newColors)[state->i].second.clear();
 }
 
-std::vector<Vec3b> reducePalette_kMeans(const Mat& image, int numColors) {
+std::vector<Vec3b> reducePalette_kMeans(Mat& image, int numColors, OpenCL::Device * device) {
     Vec3d * originalColors = new Vec3d[image.width * image.height];
     std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> colorsA, colorsB;
     std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> *colors = &colorsA, *newColors = &colorsB;
@@ -203,7 +200,8 @@ std::vector<Vec3b> reducePalette_kMeans(const Mat& image, int numColors) {
     bool changed = true;
     // get initial centroids
     // TODO: optimize
-    std::vector<Vec3b> med = reducePalette_medianCut(image, numColors);
+    image.download();
+    std::vector<Vec3b> med = reducePalette_medianCut(image, numColors, device);
     for (int i = 0; i < numColors; i++) colors->push_back(std::make_pair(med[i], std::vector<const Vec3d*>()));
     // first loop
     // place all colors in nearest bucket
@@ -297,17 +295,35 @@ static void thresholdImage_worker(void* s) {
     delete state;
 }
 
-Mat thresholdImage(const Mat& image, const std::vector<Vec3b>& palette) {
-    Mat output(image.width, image.height);
-    for (int i = 0; i < image.height; i++)
-        work.push(thresholdImage_worker, new threshold_state {i, &image, &output, &palette});
-    work.wait();
+Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device) {
+    Mat output(image.width, image.height, device);
+#ifdef HAS_OPENCL
+    if (device != NULL) {
+        uchar pal[48];
+        for (int i = 0; i < palette.size(); i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
+        OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
+        image.upload();
+        OpenCL::Kernel kernel(*device, image.width * image.height, "thresholdKernel", *image.mem, *output.mem, palette_mem, (uchar)palette.size());
+        kernel.run();
+        output.onHost = false;
+    } else {
+#endif
+        image.download();
+        output.onDevice = false;
+        for (int i = 0; i < image.height; i++)
+            work.push(thresholdImage_worker, new threshold_state {i, &image, &output, &palette});
+        work.wait();
+#ifdef HAS_OPENCL
+    }
+#endif
     return output;
 }
 
-Mat ditherImage(const Mat& image, const std::vector<Vec3b>& palette) {
+Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device) {
     vector2d<Vec3d> errmap(image.width, image.height);
-    Mat retval(image.width, image.height);
+    Mat retval(image.width, image.height, device);
+    image.download();
+    retval.onDevice = false;
     for (int y = 0; y < image.height; y++) {
         for (int x = 0; x < image.width; x++) {
             Vec3d c = Vec3d(image.at(y, x)) + errmap.at(y, x);
@@ -341,27 +357,59 @@ static double colorDistance(const Vec3b& a, const Vec3b& b) {
     return sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
 }
 
-Mat ditherImage_ordered(const Mat& image, const std::vector<Vec3b>& palette) {
-    Mat retval(image.width, image.height);
+Mat ditherImage_ordered(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device) {
+    Mat retval(image.width, image.height, device);
     double distance = 0;
     for (const Vec3b& a : palette)
         for (const Vec3b& b : palette)
             distance += colorDistance(a, b);
     distance /= palette.size() * palette.size() * 6;
-    for (int y = 0; y < image.height; y++) {
-        for (int x = 0; x < image.width; x++) {
-            Vec3d c = Vec3d(image.at(y, x)) + distance * (thresholdMap[y % 8][x % 8] / 64.0 - 0.5);
-            Vec3b newpixel = nearestColor(palette, c);
-            retval.at(y, x) = newpixel;
+#ifdef HAS_OPENCL
+    if (device != NULL) {
+        uchar pal[48];
+        for (int i = 0; i < palette.size(); i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
+        OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
+        image.upload();
+        OpenCL::Kernel kernel(*device, image.width * image.height, "orderedDither", *image.mem, *retval.mem, palette_mem, (uchar)palette.size(), (ulong)image.width, distance);
+        kernel.run();
+        retval.onHost = false;
+    } else {
+#endif
+        image.download();
+        retval.onDevice = false;
+        for (int y = 0; y < image.height; y++) {
+            for (int x = 0; x < image.width; x++) {
+                Vec3d c = Vec3d(image.at(y, x)) + distance * (thresholdMap[y % 8][x % 8] / 64.0 - 0.5);
+                Vec3b newpixel = nearestColor(palette, c);
+                retval.at(y, x) = newpixel;
+            }
         }
+#ifdef HAS_OPENCL
     }
+#endif
     return retval;
 }
 
-Mat1b rgbToPaletteImage(const Mat& image, const std::vector<Vec3b>& palette) {
-    Mat1b output(image.width, image.height);
-    for (int y = 0; y < image.height; y++)
-        for (int x = 0; x < image.width; x++)
-            output.at(y, x) = std::find(palette.begin(), palette.end(), image.at(y, x)) - palette.begin();
+Mat1b rgbToPaletteImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device) {
+    Mat1b output(image.width, image.height, device);
+#ifdef HAS_OPENCL
+    if (device != NULL) {
+        uchar pal[48];
+        for (int i = 0; i < palette.size(); i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
+        OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
+        image.upload();
+        OpenCL::Kernel kernel(*device, image.width * image.height, "rgbToPaletteKernel", *image.mem, *output.mem, palette_mem, (uchar)palette.size());
+        kernel.run();
+        output.onHost = false;
+    } else {
+#endif
+        image.download();
+        output.onDevice = false;
+        for (int y = 0; y < image.height; y++)
+            for (int x = 0; x < image.width; x++)
+                output.at(y, x) = std::find(palette.begin(), palette.end(), Vec3b(image.at(y, x))) - palette.begin();
+#ifdef HAS_OPENCL
+    }
+#endif
     return output;
 }

@@ -68,6 +68,11 @@
             "platform": "(windows | linux) & !uwp & !arm"
         }
     ],
-    "default-features": [],
-    "features": {}
+    "default-features": ["opencl"],
+    "features": {
+        "opencl": {
+            "description": "Use OpenCL for GPU-accelerated conversion",
+            "dependencies": ["opencl"]
+        }
+    }
 }
