@@ -37,10 +37,9 @@ jobs:
         }
 
         Invoke-Environment "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-        bash -c "printf '// Generated automatically; do not edit!\n#include <string>\nnamespace OpenCL {std::string get_opencl_c_code() { return `"' > src/cc-pixel-cl.cpp"
-        bash -c "sed -n -e '/#ifndef OPENCV/{:a; N; /#endif/!ba; d}; s/$/\\n\\/g; s/`"/\\`"/g; p' src/cc-pixel.cpp >> src/cc-pixel-cl.cpp"
-        bash -c "echo '`";}}' >> src/cc-pixel-cl.cpp"
-        Set-Item ENV:ExternalCompilerOptions '/DHAS_OPENCL'
+        bash -c "printf '// Generated automatically; do not edit!\n#include <string>\nnamespace OpenCL {std::string get_opencl_c_code() { return ""' > src/cc-pixel-cl.cpp"
+        bash -c "sed -n -e '/#ifndef OPENCV/{:a; N; /#endif/!ba; d}; s/`$/\\n\\/g; s/""/\\""/g; p' src/cc-pixel.cpp >> src/cc-pixel-cl.cpp"
+        bash -c "echo '"";}}' >> src/cc-pixel-cl.cpp"
         msbuild "sanjuuni.sln" /p:Configuration=Release
         # Remove buildtrees that kill the cache
         Remove-Item vcpkg\buildtrees\* -Force -Recurse -ErrorAction SilentlyContinue
