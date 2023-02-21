@@ -40,8 +40,8 @@ jobs:
         Set-Item ENV:ExternalCompilerOptions /DHAS_OPENCL
         bash -c @'
         printf '// Generated automatically; do not edit!\n#include <string>\nnamespace OpenCL {std::string get_opencl_c_code() { return "' > src/cc-pixel-cl.cpp
-	      sed -n -e '/#ifndef OPENCV/{:a; N; /#endif/!ba; d}; s/$/\\n\\/g; s/"/\\"/g; p' src/cc-pixel.cpp >> src/cc-pixel-cl.cpp
-	      echo '";}}' >> src/cc-pixel-cl.cpp
+        sed -n -e '/#ifndef OPENCV/{:a; N; /#endif/!ba; d}; s/$/\\n\\/g; s/"/\\"/g; p' src/cc-pixel.cpp >> src/cc-pixel-cl.cpp
+        echo '";}}' >> src/cc-pixel-cl.cpp
         '@
         msbuild "sanjuuni.sln" /p:Configuration=Release
         # Remove buildtrees that kill the cache
