@@ -8,6 +8,8 @@ jobs:
     runs-on: windows-2022
     steps:
     - uses: actions/checkout@v1
+    - name: Setup WSL
+      uses: Vampire/setup-wsl@v2.0.1
     - name: Restore vcpkg cache
       uses: lukka/run-vcpkg@v10
       with:
@@ -18,7 +20,7 @@ jobs:
         & $Env:VCPKG_ROOT\vcpkg integrate install
         ((Get-Content -path "$Env:VCPKG_ROOT\ports\poco\portfile.cmake") -replace "VCPKG_TARGET_IS_WINDOWS", "false") -replace "lib/cmake/Poco", "cmake" | Set-Content -Path "$Env:VCPKG_ROOT\ports\poco\portfile.cmake"
     - name: Make CL code
-      shell: C:\Windows\System32\bash.exe -e {0}
+      shell: wsl-bash {0}
       run: |
         printf '// Generated automatically; do not edit!\n#include <string>\nnamespace OpenCL {std::string get_opencl_c_code() { return "' > src/cc-pixel-cl.cpp
         sed -n -e '/#ifndef OPENCV/{:a; N; /#endif/!ba; d}; s/$/\\n\\/g; s/"/\\"/g; p' src/cc-pixel.cpp >> src/cc-pixel-cl.cpp
