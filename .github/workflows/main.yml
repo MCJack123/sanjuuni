@@ -37,10 +37,10 @@ jobs:
         }
 
         Invoke-Environment "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-        Set-Item ENV:ExternalCompilerOptions /DHAS_OPENCL
         bash -c "printf '// Generated automatically; do not edit!\n#include <string>\nnamespace OpenCL {std::string get_opencl_c_code() { return `"' > src/cc-pixel-cl.cpp"
         bash -c "sed -n -e '/#ifndef OPENCV/{:a; N; /#endif/!ba; d}; s/$/\\n\\/g; s/`"/\\`"/g; p' src/cc-pixel.cpp >> src/cc-pixel-cl.cpp"
         bash -c "echo '`";}}' >> src/cc-pixel-cl.cpp"
+        Set-Item ENV:ExternalCompilerOptions '/DHAS_OPENCL'
         msbuild "sanjuuni.sln" /p:Configuration=Release
         # Remove buildtrees that kill the cache
         Remove-Item vcpkg\buildtrees\* -Force -Recurse -ErrorAction SilentlyContinue
@@ -50,3 +50,46 @@ jobs:
         name: sanjuuni-Artifact
         path: |
           x64\Release\sanjuuni.exe
+          x64\Release\avcodec-59.dll
+          x64\Release\swresample-4.dll
+          x64\Release\avutil-57.dll
+          x64\Release\soxr.dll
+          x64\Release\libwebpmux.dll
+          x64\Release\libwebp.dll
+          x64\Release\libsharpyuv.dll
+          x64\Release\liblzma.dll
+          x64\Release\dav1d.dll
+          x64\Release\snappy.dll
+          x64\Release\libmp3lame.DLL
+          x64\Release\openjp2.dll
+          x64\Release\opus.dll
+          x64\Release\speex-1.dll
+          x64\Release\theoraenc.dll
+          x64\Release\ogg.dll
+          x64\Release\theoradec.dll
+          x64\Release\vorbis.dll
+          x64\Release\vorbisenc.dll
+          x64\Release\openh264-6.dll
+          x64\Release\zlib1.dll
+          x64\Release\avdevice-59.dll
+          x64\Release\avfilter-8.dll
+          x64\Release\swscale-6.dll
+          x64\Release\avformat-59.dll
+          x64\Release\bz2.dll
+          x64\Release\modplug.dll
+          x64\Release\PocoFoundation.dll
+          x64\Release\pcre2-8.dll
+          x64\Release\PocoNet.dll
+          x64\Release\PocoNetSSL.dll
+          x64\Release\PocoCrypto.dll
+          x64\Release\libcrypto-3-x64.dll
+          x64\Release\PocoUtil.dll
+          x64\Release\PocoXML.dll
+          x64\Release\libexpat.dll
+          x64\Release\PocoJSON.dll
+          x64\Release\libssl-3-x64.dll
+          32vid-player.lua
+          bimg-player.lua
+          raw-player.lua
+          websocket-player.lua
+          LICENSE
