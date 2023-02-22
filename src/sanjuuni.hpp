@@ -86,7 +86,7 @@ public:
 #ifdef HAS_OPENCL
     std::shared_ptr<OpenCL::Memory<T>> mem;
 #endif
-    bool onHost = true, onDevice = true;
+    bool onHost = true, onDevice = false;
     class row {
         std::vector<T> * vec;
         unsigned ypos;

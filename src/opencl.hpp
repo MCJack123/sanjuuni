@@ -600,9 +600,9 @@ public:
 		link_parameters(starting_position, parameters...); // expand variadic template to link kernel parameters
 		return *this;
 	}
-	inline Kernel& enqueue_run(const uint t=1u) {
+	inline Kernel& enqueue_run(const uint t=1u, const uint o=0u) {
 		for(uint i=0u; i<t; i++) {
-			cl_queue.enqueueNDRangeKernel(cl_kernel, cl::NullRange, cl_range_global, cl_range_local);
+			cl_queue.enqueueNDRangeKernel(cl_kernel, o ? cl::NDRange(o) : cl::NullRange, cl_range_global, cl_range_local);
 		}
 		return *this;
 	}

@@ -306,6 +306,7 @@ Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device
         OpenCL::Kernel kernel(*device, image.width * image.height, "thresholdKernel", *image.mem, *output.mem, palette_mem, (uchar)palette.size());
         kernel.run();
         output.onHost = false;
+        output.onDevice = true;
     } else {
 #endif
         image.download();
@@ -320,24 +321,45 @@ Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device
 }
 
 Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device) {
-    vector2d<Vec3d> errmap(image.width, image.height);
     Mat retval(image.width, image.height, device);
-    image.download();
-    retval.onDevice = false;
-    for (int y = 0; y < image.height; y++) {
-        for (int x = 0; x < image.width; x++) {
-            Vec3d c = Vec3d(image.at(y, x)) + errmap.at(y, x);
-            Vec3b newpixel = nearestColor(palette, c);
-            retval.at(y, x) = newpixel;
-            Vec3d err = c - Vec3d(newpixel);
-            if (x < image.width - 1) errmap.at(y, x + 1) += err * (7.0/16.0);
-            if (y < image.height - 1) {
-                if (x > 1) errmap.at(y + 1, x - 1) += err * (3.0/16.0);
-                errmap.at(y + 1, x) += err * (5.0/16.0);
-                if (x < image.width - 1) errmap.at(y + 1, x + 1) += err * (1.0/16.0);
-            }
+    /*if (device != NULL) {
+        // Apparently this is really slow. I don't want to delete it though, so it stays. It took me too much effort to get working.
+        uchar pal[48];
+        for (int i = 0; i < palette.size(); i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
+        OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
+        OpenCL::Memory<float> error(*device, image.width * 3);
+        OpenCL::Memory<float> newerror(*device, image.width * 3);
+        image.upload();
+        OpenCL::Kernel kernel(*device, 1, "floydSteinbergDither", *image.mem, *retval.mem, palette_mem, (uchar)palette.size(), error, newerror, (ulong)image.width);
+        for (int y = 0; y < image.height; y++) {
+            kernel.enqueue_run(1, y);
+            device->get_cl_queue().enqueueCopyBuffer(newerror.get_cl_buffer(), error.get_cl_buffer(), 0, 0, image.width * 3 * sizeof(float));
+            device->get_cl_queue().enqueueFillBuffer<float>(newerror.get_cl_buffer(), 0.0f, 0, image.width * 3 * sizeof(float));
         }
-    }
+        kernel.finish_queue();
+        retval.onHost = false;
+        retval.onDevice = true;
+    } else {*/
+        image.download();
+        retval.onDevice = false;
+        std::vector<Vec3d> error(image.width);
+        for (int y = 0; y < image.height; y++) {
+            std::vector<Vec3d> newerror(image.width);
+            for (int x = 0; x < image.width; x++) {
+                Vec3d c = Vec3d(image.at(y, x)) + error[x];
+                Vec3b newpixel = nearestColor(palette, c);
+                retval.at(y, x) = newpixel;
+                Vec3d err = c - Vec3d(newpixel);
+                if (x < image.width - 1) {
+                    error[x + 1] += err * (7.0/16.0);
+                    newerror[x + 1] += err * (1.0/16.0);
+                }
+                if (x > 0) newerror[x - 1] += err * (3.0/16.0);
+                newerror[x] += err * (5.0/16.0);
+            }
+            error = newerror;
+        }
+    //}
     return retval;
 }
 
@@ -373,6 +395,7 @@ Mat ditherImage_ordered(Mat& image, const std::vector<Vec3b>& palette, OpenCL::D
         OpenCL::Kernel kernel(*device, image.width * image.height, "orderedDither", *image.mem, *retval.mem, palette_mem, (uchar)palette.size(), (ulong)image.width, distance);
         kernel.run();
         retval.onHost = false;
+        retval.onDevice = true;
     } else {
 #endif
         image.download();
@@ -401,6 +424,7 @@ Mat1b rgbToPaletteImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::D
         OpenCL::Kernel kernel(*device, image.width * image.height, "rgbToPaletteKernel", *image.mem, *output.mem, palette_mem, (uchar)palette.size());
         kernel.run();
         output.onHost = false;
+        output.onDevice = true;
     } else {
 #endif
         image.download();

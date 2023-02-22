@@ -30,19 +30,23 @@
 #define __read_only 
 #define __write_only
 #define get_global_id(n) 0
+#define get_global_offset(n) 0
 #define get_group_id(n) 0
 #define get_local_id(n) 0
 #define barrier(n) ((void)0)
-#define vload3(n, data) (uchar3){data[(n)*3], data[(n)*3+1], data[(n)*3+2]}
-#define vstore3(v, n, data) {data[(n)*3] = (v).x; data[(n)*3+1] = (v).y; data[(n)*3+2] = (v).z;}
 #define CLK_LOCAL_MEM_FENCE 0
 
 static float distance(float3 p0, float3 p1) {return sqrt((p1.x - p0.x)*(p1.x - p0.x) + (p1.y - p0.y)*(p1.y - p0.y) + (p1.z - p0.z)*(p1.z - p0.z));}
+float3 operator+(const float3& a, const float3& b) {return {a.x + b.x, a.y + b.y, a.z + b.z};}
 float3 operator-(const float3& a, const float3& b) {return {a.x - b.x, a.y - b.y, a.z - b.z};}
 float3& operator+=(float3& a, const float3& b) {a.x += b.x; a.y += b.y; a.z += b.z; return a;}
 float3& operator+=(float3& a, float b) {a.x += b; a.y += b; a.z += b; return a;}
 float3 operator*(const float3& v, float s) {return {v.x * s, v.y * s, v.z * s};}
 int operator==(const float3& a, const float3& b) {return a.x == b.x && a.y == b.y && a.z == b.z;}
+inline uchar3 vload3(int n, uchar * data) {return {data[n*3], data[n*3+1], data[n*3+2]};}
+inline float3 vload3(int n, float * data) {return {data[n*3], data[n*3+1], data[n*3+2]};}
+inline void vstore3(uchar3 v, int n, uchar * data) {data[n*3] = v.x; data[n*3+1] = v.y; data[n*3+2] = v.z;}
+inline void vstore3(float3 v, int n, float * data) {data[n*3] = v.x; data[n*3+1] = v.y; data[n*3+2] = v.z;}
 #endif
 
 /* OpenCL-compatible C to be able to copy straight to OpenCL */
@@ -377,12 +381,10 @@ __kernel void toLab(__global const uchar * image, __global uchar * output) {
     output[get_global_id(0)*3] = L; output[get_global_id(0)*3+1] = a; output[get_global_id(0)*3+2] = B;
 }
 
-__kernel void thresholdKernel(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size) {
-    __private float3 pix, col;
+static float3 closestPixel(float3 pix, __constant uchar * palette, uchar palette_size) {
     __private uchar i;
-    __private float3 closest;
+    __private float3 closest, col;
     __private float dist;
-    pix.x = image[get_global_id(0)*3]; pix.y = image[get_global_id(0)*3+1]; pix.z = image[get_global_id(0)*3+2];
     closest.x = palette[0]; closest.y = palette[1]; closest.z = palette[2];
     dist = distance(pix, closest);
     for (i = 1; i < palette_size; i++) {
@@ -392,8 +394,34 @@ __kernel void thresholdKernel(__global const uchar * image, __global uchar * out
             dist = distance(pix, col);
         }
     }
+    return closest;
+}
+
+__kernel void thresholdKernel(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size) {
+    __private float3 pix, closest;
+    pix.x = image[get_global_id(0)*3]; pix.y = image[get_global_id(0)*3+1]; pix.z = image[get_global_id(0)*3+2];
+    closest = closestPixel(pix, palette, palette_size);
     output[get_global_id(0)*3] = closest.x; output[get_global_id(0)*3+1] = closest.y; output[get_global_id(0)*3+2] = closest.z;
 }
+
+/*__kernel void floydSteinbergDither(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size, __global float * error, __global float * newerror, ulong width) {
+    __private uint x;
+    __private float3 pix, closest, err;
+    __private ulong yoff = get_global_offset(0)*width;
+    for (x = 0; x < width; x++) {
+        pix.x = image[(yoff+x)*3]; pix.y = image[(yoff+x)*3+1]; pix.z = image[(yoff+x)*3+2];
+        pix += vload3(x, error);
+        closest = closestPixel(pix, palette, palette_size);
+        output[(yoff+x)*3] = closest.x; output[(yoff+x)*3+1] = closest.y; output[(yoff+x)*3+2] = closest.z;
+        err = pix - closest;
+        if (x < width - 1) {
+            vstore3(vload3(x + 1, error) + (err * 0.4375f), x + 1, error);
+            vstore3(vload3(x + 1, newerror) + (err * 0.0625f), x + 1, newerror);
+        }
+        if (x > 0) vstore3(vload3(x - 1, newerror) + (err * 0.1875f), x - 1, newerror);
+        vstore3(vload3(x, newerror) + (err * 0.3125f), x, newerror);
+    }
+}*/
 
 static __constant int thresholdMap[8][8] = {
     { 0, 32,  8, 40,  2, 34, 10, 42},
@@ -407,21 +435,10 @@ static __constant int thresholdMap[8][8] = {
 };
 
 __kernel void orderedDither(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size, ulong width, double factor) {
-    __private float3 pix, col;
-    __private uchar i;
-    __private float3 closest;
-    __private float dist;
+    __private float3 pix, closest;
     pix.x = image[get_global_id(0)*3]; pix.y = image[get_global_id(0)*3+1]; pix.z = image[get_global_id(0)*3+2];
     pix += (float)factor * (thresholdMap[(get_global_id(0) / width) % 8][(get_global_id(0) % width) % 8] / 64.0f - 0.5f);
-    closest.x = palette[0]; closest.y = palette[1]; closest.z = palette[2];
-    dist = distance(pix, closest);
-    for (i = 1; i < palette_size; i++) {
-        col.x = palette[i*3]; col.y = palette[i*3+1]; col.z = palette[i*3+2];
-        if (distance(pix, col) < dist) {
-            closest = col;
-            dist = distance(pix, col);
-        }
-    }
+    closest = closestPixel(pix, palette, palette_size);
     output[get_global_id(0)*3] = closest.x; output[get_global_id(0)*3+1] = closest.y; output[get_global_id(0)*3+2] = closest.z;
 }
 

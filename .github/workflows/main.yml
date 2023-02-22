@@ -46,6 +46,7 @@ jobs:
 
         Invoke-Environment "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
         msbuild "sanjuuni.sln" /p:Configuration=Release
+        copy 32vid-player.lua bimg-player.lua raw-player.lua websocket-player.lua LICENSE x64\Release\
         # Remove buildtrees that kill the cache
         Remove-Item vcpkg\buildtrees\* -Force -Recurse -ErrorAction SilentlyContinue
     - name: Upload artifact
@@ -93,8 +94,8 @@ jobs:
           x64\Release\libexpat.dll
           x64\Release\PocoJSON.dll
           x64\Release\libssl-3-x64.dll
-          32vid-player.lua
-          bimg-player.lua
-          raw-player.lua
-          websocket-player.lua
-          LICENSE
+          x64\Release\32vid-player.lua
+          x64\Release\bimg-player.lua
+          x64\Release\raw-player.lua
+          x64\Release\websocket-player.lua
+          x64\Release\LICENSE

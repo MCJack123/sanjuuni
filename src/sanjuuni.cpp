@@ -466,12 +466,13 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("mute", "m", "Remove audio from output"));
     options.addOption(Option("width", "W", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("height", "H", "Resize the image to the specified height", false, "size", true).validator(new IntValidator(1, 65535)));
+    options.addOption(Option("disable-opencl", "", "Disable OpenCL computation; force CPU-only"));
     options.addOption(Option("help", "h", "Show this help"));
     OptionProcessor argparse(options);
     argparse.setUnixStyle(true);
 
     std::string input, output, subtitle, format;
-    bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false;
+    bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false, disableOpenCL = false;
     OutputType mode = OutputType::Default;
     int compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
     int port = 80, width = -1, height = -1, zlibCompression = 5;
@@ -509,6 +510,7 @@ int main(int argc, const char * argv[]) {
                 else if (option == "mute") mute = true;
                 else if (option == "width") width = std::stoi(arg);
                 else if (option == "height") height = std::stoi(arg);
+                else if (option == "disable-opencl") disableOpenCL = true;
                 else if (option == "help") throw HelpException();
             }
         }
@@ -751,34 +753,38 @@ int main(int argc, const char * argv[]) {
     }
 
 #ifdef HAS_OPENCL
-    try {
-        device = new OpenCL::Device(OpenCL::select_device_with_most_flops());
-        /*Mat testImage(2, 2, device);
-        testImage.at(0, 0) = {255, 0, 0};
-        testImage.at(0, 1) = {255, 255, 0};
-        testImage.at(1, 0) = {0, 255, 0};
-        testImage.at(1, 1) = {0, 0, 255};
-        Mat expected = ditherImage_ordered(testImage, {{255, 192, 128}, {0, 64, 96}}, NULL);
-        Mat actual = ditherImage_ordered(testImage, {{255, 192, 128}, {0, 64, 96}}, device);
-        printf("%d %d %d => %d %d %d / %d %d %d\n",
-            testImage.at(0, 0).x, testImage.at(0, 0).y, testImage.at(0, 0).z,
-            expected.at(0, 0).x, expected.at(0, 0).y, expected.at(0, 0).z,
-            actual.at(0, 0).x, actual.at(0, 0).y, actual.at(0, 0).z);
-        printf("%d %d %d => %d %d %d / %d %d %d\n",
-            testImage.at(0, 1).x, testImage.at(0, 1).y, testImage.at(0, 1).z,
-            expected.at(0, 1).x, expected.at(0, 1).y, expected.at(0, 1).z,
-            actual.at(0, 1).x, actual.at(0, 1).y, actual.at(0, 1).z);
-        printf("%d %d %d => %d %d %d / %d %d %d\n",
-            testImage.at(1, 0).x, testImage.at(1, 0).y, testImage.at(1, 0).z,
-            expected.at(1, 0).x, expected.at(1, 0).y, expected.at(1, 0).z,
-            actual.at(1, 0).x, actual.at(1, 0).y, actual.at(1, 0).z);
-        printf("%d %d %d => %d %d %d / %d %d %d\n",
-            testImage.at(1, 1).x, testImage.at(1, 1).y, testImage.at(1, 1).z,
-            expected.at(1, 1).x, expected.at(1, 1).y, expected.at(1, 1).z,
-            actual.at(1, 1).x, actual.at(1, 1).y, actual.at(1, 1).z);*/
-    } catch (std::exception &e) {
-        std::cerr << "Warning: Could not open OpenCL device: " << e.what() << ". Falling back to CPU computation.\n";
-        device = NULL;
+    if (!disableOpenCL) {
+        try {
+            device = new OpenCL::Device(OpenCL::select_device_with_most_flops());
+            /*Mat testImage(2, 2, device);
+            testImage.at(0, 0) = {255, 0, 0};
+            testImage.at(0, 1) = {255, 255, 0};
+            testImage.at(1, 0) = {0, 255, 0};
+            testImage.at(1, 1) = {0, 0, 255};
+            Mat expected = ditherImage_ordered(testImage, {{255, 192, 128}, {0, 64, 96}}, NULL);
+            Mat actual = ditherImage_ordered(testImage, {{255, 192, 128}, {0, 64, 96}}, device);
+            expected.download();
+            actual.download();
+            printf("%d %d %d => %d %d %d / %d %d %d\n",
+                testImage.at(0, 0).x, testImage.at(0, 0).y, testImage.at(0, 0).z,
+                expected.at(0, 0).x, expected.at(0, 0).y, expected.at(0, 0).z,
+                actual.at(0, 0).x, actual.at(0, 0).y, actual.at(0, 0).z);
+            printf("%d %d %d => %d %d %d / %d %d %d\n",
+                testImage.at(0, 1).x, testImage.at(0, 1).y, testImage.at(0, 1).z,
+                expected.at(0, 1).x, expected.at(0, 1).y, expected.at(0, 1).z,
+                actual.at(0, 1).x, actual.at(0, 1).y, actual.at(0, 1).z);
+            printf("%d %d %d => %d %d %d / %d %d %d\n",
+                testImage.at(1, 0).x, testImage.at(1, 0).y, testImage.at(1, 0).z,
+                expected.at(1, 0).x, expected.at(1, 0).y, expected.at(1, 0).z,
+                actual.at(1, 0).x, actual.at(1, 0).y, actual.at(1, 0).z);
+            printf("%d %d %d => %d %d %d / %d %d %d\n",
+                testImage.at(1, 1).x, testImage.at(1, 1).y, testImage.at(1, 1).z,
+                expected.at(1, 1).x, expected.at(1, 1).y, expected.at(1, 1).z,
+                actual.at(1, 1).x, actual.at(1, 1).y, actual.at(1, 1).z);*/
+        } catch (std::exception &e) {
+            std::cerr << "Warning: Could not open OpenCL device: " << e.what() << ". Falling back to CPU computation.\n";
+            device = NULL;
+        }
     }
 #endif
 
