@@ -139,13 +139,13 @@ public:
     void remove_last_line() {vec.resize(width*--height);}
     void download() {
 #ifdef HAS_OPENCL
-        if (mem != NULL && !onHost) mem->read_from_device();
+        if (mem != NULL && !onHost && onDevice) mem->read_from_device();
 #endif
         onHost = true;
     }
     void upload() {
 #ifdef HAS_OPENCL
-        if (mem != NULL && !onDevice) mem->write_to_device();
+        if (mem != NULL && !onDevice && onHost) mem->write_to_device();
 #endif
         onDevice = true;
     }

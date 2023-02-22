@@ -32,6 +32,7 @@ Mat makeLabImage(Mat& image, OpenCL::Device * device) {
         OpenCL::Kernel kernel(*device, image.width * image.height, "toLab", *image.mem, *retval.mem);
         kernel.run();
         retval.onHost = false;
+        retval.onDevice = true;
     } else {
 #endif
         image.download();

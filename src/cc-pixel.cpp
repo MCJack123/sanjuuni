@@ -451,3 +451,9 @@ __kernel void rgbToPaletteKernel(__global const uchar * image, __global uchar * 
         }
     }
 }
+
+__kernel void copyColors(__global const uchar * input, __global uchar * colors, ulong width) {
+    __private ulong y = get_global_id(0) * 2 / width, x = get_global_id(0) * 2 % width;
+    colors[(y-y%3)*width + x*3 + (y%3)*2] = input[y*width+x];
+    colors[(y-y%3)*width + x*3 + (y%3)*2 + 1] = input[y*width+x+1];
+}
