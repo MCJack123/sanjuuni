@@ -351,11 +351,11 @@ Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * 
                 retval.at(y, x) = newpixel;
                 Vec3d err = c - Vec3d(newpixel);
                 if (x < image.width - 1) {
-                    error[x + 1] += err * (7.0/16.0);
+                    error[x + 1] += err * (5.0/16.0);
                     newerror[x + 1] += err * (1.0/16.0);
                 }
-                if (x > 0) newerror[x - 1] += err * (3.0/16.0);
-                newerror[x] += err * (5.0/16.0);
+                if (x > 0) newerror[x - 1] += err * (2.0/16.0);
+                newerror[x] += err * (3.0/16.0);
             }
             error = newerror;
         }

@@ -17,14 +17,11 @@ sanjuuni: $(OBJ)
 	$(CXX) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 $(SDIR)/cc-pixel-cl.cpp: $(SDIR)/cc-pixel.cpp
-	printf '// Generated automatically; do not edit!\n#include <string>\nnamespace OpenCL {std::string get_opencl_c_code() { return "' > $@
-	sed -n -e '/#ifndef OPENCV/{:a; N; /#endif/!ba; d}; s/$$/\\n\\/g; s/"/\\"/g; p' $< >> $@
-	echo '";}}' >> $@
+	printf '// Generated automatically; do not edit!\n#include <string>\nnamespace OpenCL {std::string get_opencl_c_code() { return ' > $@
+	sed -n -e '/#ifndef OPENCV/{:a; N; /#endif/!ba; d}; s/"/\\"/g; s/^/"/g; s/$$/\\n"/g; p' $< >> $@
+	echo ';}}' >> $@
 
-$(ODIR)/generator.o: $(SDIR)/generator.cpp $(SDIR)/sanjuuni.hpp $(SDIR)/opencl.hpp
-	$(CXX) -o $@ -c $(CPPFLAGS) $(CXXFLAGS) $<
-
-$(ODIR)/%.o: $(SDIR)/%.cpp $(SDIR)/sanjuuni.hpp
+$(ODIR)/%.o: $(SDIR)/%.cpp $(SDIR)/sanjuuni.hpp $(SDIR)/opencl.hpp
 	$(CXX) -o $@ -c $(CPPFLAGS) $(CXXFLAGS) $<
 
 clean:
