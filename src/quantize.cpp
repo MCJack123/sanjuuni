@@ -303,6 +303,7 @@ Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device
         uchar pal[48];
         for (int i = 0; i < palette.size(); i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
         OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
+        palette_mem.write_to_device();
         image.upload();
         OpenCL::Kernel kernel(*device, image.width * image.height, "thresholdKernel", *image.mem, *output.mem, palette_mem, (uchar)palette.size());
         kernel.run();
@@ -323,24 +324,21 @@ Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device
 
 Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device) {
     Mat retval(image.width, image.height, device);
-    /*if (device != NULL) {
-        // Apparently this is really slow. I don't want to delete it though, so it stays. It took me too much effort to get working.
+    if (device != NULL) {
         uchar pal[48];
         for (int i = 0; i < palette.size(); i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
         OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
-        OpenCL::Memory<float> error(*device, image.width * 3);
-        OpenCL::Memory<float> newerror(*device, image.width * 3);
+        OpenCL::Memory<float> error(*device, image.width * (image.height + 1) * 3, 1, false, true);
+        OpenCL::Memory<uint> progress(*device, image.height, 1, false, true);
+        device->get_cl_queue().enqueueFillBuffer<float>(error.get_cl_buffer(), 0.0f, 0, image.width * (image.height + 1) * 3 * sizeof(float));
+        device->get_cl_queue().enqueueFillBuffer<uint>(progress.get_cl_buffer(), 0u, 0, image.height * sizeof(uint));
+        palette_mem.enqueue_write_to_device();
         image.upload();
-        OpenCL::Kernel kernel(*device, 1, "floydSteinbergDither", *image.mem, *retval.mem, palette_mem, (uchar)palette.size(), error, newerror, (ulong)image.width);
-        for (int y = 0; y < image.height; y++) {
-            kernel.enqueue_run(1, y);
-            device->get_cl_queue().enqueueCopyBuffer(newerror.get_cl_buffer(), error.get_cl_buffer(), 0, 0, image.width * 3 * sizeof(float));
-            device->get_cl_queue().enqueueFillBuffer<float>(newerror.get_cl_buffer(), 0.0f, 0, image.width * 3 * sizeof(float));
-        }
-        kernel.finish_queue();
+        OpenCL::Kernel kernel(*device, image.height, "floydSteinbergDither", *image.mem, *retval.mem, palette_mem, (uchar)palette.size(), error, progress, (ulong)image.width);
+        kernel.run();
         retval.onHost = false;
         retval.onDevice = true;
-    } else {*/
+    } else {
         image.download();
         retval.onDevice = false;
         std::vector<Vec3d> error(image.width);
@@ -360,7 +358,7 @@ Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * 
             }
             error = newerror;
         }
-    //}
+    }
     return retval;
 }
 
@@ -392,6 +390,7 @@ Mat ditherImage_ordered(Mat& image, const std::vector<Vec3b>& palette, OpenCL::D
         uchar pal[48];
         for (int i = 0; i < palette.size(); i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
         OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
+        palette_mem.write_to_device();
         image.upload();
         OpenCL::Kernel kernel(*device, image.width * image.height, "orderedDither", *image.mem, *retval.mem, palette_mem, (uchar)palette.size(), (ulong)image.width, distance);
         kernel.run();
@@ -421,6 +420,7 @@ Mat1b rgbToPaletteImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::D
         uchar pal[48];
         for (int i = 0; i < palette.size(); i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
         OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
+        palette_mem.write_to_device();
         image.upload();
         OpenCL::Kernel kernel(*device, image.width * image.height, "rgbToPaletteKernel", *image.mem, *output.mem, palette_mem, (uchar)palette.size());
         kernel.run();

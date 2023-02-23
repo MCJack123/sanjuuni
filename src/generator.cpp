@@ -51,16 +51,18 @@ void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars,
         *cols = new uchar[(height / 3) * (width / 2)];
         input.upload();
         try {
-            OpenCL::Memory<uchar> colors_mem(*device, height * width / 6, 6);
+            OpenCL::Memory<uchar> colors_mem(*device, height * width / 6, 6, false, true);
             OpenCL::Memory<uchar> chars_mem(*device, (height / 3) * (width / 2), 1, *chars);
             OpenCL::Memory<uchar> cols_mem(*device, (height / 3) * (width / 2), 1, *cols);
             OpenCL::Memory<uchar> palette_mem(*device, 16, 3, pal);
             OpenCL::Kernel copykernel(*device, height * width / 2, "copyColors", *input.mem, colors_mem, (ulong)width);
             OpenCL::Kernel kernel(*device, height * width / 6, "toCCPixel", colors_mem, chars_mem, cols_mem, palette_mem);
+            palette_mem.enqueue_write_to_device();
             copykernel.enqueue_run();
-            kernel.run();
-            chars_mem.read_from_device();
-            cols_mem.read_from_device();
+            kernel.enqueue_run();
+            chars_mem.enqueue_read_from_device();
+            cols_mem.enqueue_read_from_device();
+            device->finish_queue();
         } catch (std::exception &e) {
             delete[] *chars;
             delete[] *cols;

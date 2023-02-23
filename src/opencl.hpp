@@ -348,7 +348,7 @@ public:
 			initialize_auxiliary_pointers();
 			host_buffer_exists = true;
 		}
-		write_to_device();
+		//write_to_device();
 	}
 	inline Memory(Device& device, const ulong N, const uint dimensions, T* const host_buffer, const bool allocate_device=true) {
 		if(!device.is_initialized()) print_error("No Device selected. Call Device constructor.");
@@ -360,7 +360,7 @@ public:
 		initialize_auxiliary_pointers();
 		host_buffer_exists = true;
 		external_host_buffer = true;
-		write_to_device();
+		//write_to_device();
 	}
 	inline Memory() {} // default constructor
 	inline ~Memory() {

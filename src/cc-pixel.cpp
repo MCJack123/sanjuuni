@@ -135,7 +135,7 @@ static void ditherCCImage(__private float3 * img, __private float3 a, __private 
 }
 
 /* character: high byte = bg << 4 | fg, low byte = char */
-__kernel void toCCPixel(__global uchar * colors, __global uchar * character, __global uchar * color, __constant uchar3 * palette) {
+__kernel void toCCPixel(__global const uchar * colors, __global uchar * character, __global uchar * color, __constant uchar3 * palette) {
     __private uchar used_colors[6];
     __private int n_used_colors = 0;
     __private int i, j, tmp, maxComponent;
@@ -404,24 +404,29 @@ __kernel void thresholdKernel(__global const uchar * image, __global uchar * out
     output[get_global_id(0)*3] = closest.x; output[get_global_id(0)*3+1] = closest.y; output[get_global_id(0)*3+2] = closest.z;
 }
 
-/*__kernel void floydSteinbergDither(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size, __global float * error, __global float * newerror, ulong width) {
+__kernel void floydSteinbergDither(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size, __global float * error, __global uint * progress, ulong width) {
     __private uint x;
     __private float3 pix, closest, err;
-    __private ulong yoff = get_global_offset(0)*width;
-    for (x = 0; x < width; x++) {
-        pix.x = image[(yoff+x)*3]; pix.y = image[(yoff+x)*3+1]; pix.z = image[(yoff+x)*3+2];
-        pix += vload3(x, error);
-        closest = closestPixel(pix, palette, palette_size);
-        output[(yoff+x)*3] = closest.x; output[(yoff+x)*3+1] = closest.y; output[(yoff+x)*3+2] = closest.z;
-        err = pix - closest;
-        if (x < width - 1) {
-            vstore3(vload3(x + 1, error) + (err * 0.4375f), x + 1, error);
-            vstore3(vload3(x + 1, newerror) + (err * 0.0625f), x + 1, newerror);
+    __private uint id = get_global_id(0);
+    __private ulong yoff = id*width;
+    for (x = 0; x < width;) {
+        if (id == 0 || progress[id-1] >= x + 2) {
+            pix.x = image[(yoff+x)*3]; pix.y = image[(yoff+x)*3+1]; pix.z = image[(yoff+x)*3+2];
+            pix += vload3(yoff + x, error);
+            closest = closestPixel(pix, palette, palette_size);
+            output[(yoff+x)*3] = closest.x; output[(yoff+x)*3+1] = closest.y; output[(yoff+x)*3+2] = closest.z;
+            err = pix - closest;
+            if (x < width - 1) {
+                vstore3(vload3(yoff + x + 1, error) + (err * 0.3125f), yoff + x + 1, error);
+                vstore3((err * 0.0625f), yoff + width + x + 1, error);
+            }
+            if (x > 0) vstore3(vload3(yoff + width + x - 1, error) + (err * 0.125f), yoff + width + x - 1, error);
+            vstore3(vload3(yoff + width + x, error) + (err * 0.1875f), yoff + width + x, error);
+            x++; progress[id]++;
         }
-        if (x > 0) vstore3(vload3(x - 1, newerror) + (err * 0.1875f), x - 1, newerror);
-        vstore3(vload3(x, newerror) + (err * 0.3125f), x, newerror);
     }
-}*/
+    progress[id] = width + 2;
+}
 
 static __constant int thresholdMap[8][8] = {
     { 0, 32,  8, 40,  2, 34, 10, 42},

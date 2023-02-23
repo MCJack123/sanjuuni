@@ -291,7 +291,7 @@ extern WorkQueue work;
  * @param color A pointer to the resulting color pair
  * @param palette A 16-long array of colors in the palette
  */
-extern void toCCPixel(uchar * colors, uchar * character, uchar * color, const uchar3 * palette);
+extern void toCCPixel(const uchar * colors, uchar * character, uchar * color, const uchar3 * palette);
 
 /* octree */
 /**
