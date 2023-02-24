@@ -21,8 +21,18 @@
 
 #include "sanjuuni.hpp"
 #include <algorithm>
+#include <list>
+
+#define ALLOWB (2+4+8)
 
 extern void toLab(const uchar * image, uchar * output);
+
+#define PARALLEL_BITONIC_B2_KERNEL "ParallelBitonic_B2"
+#define PARALLEL_BITONIC_B4_KERNEL "ParallelBitonic_B4"
+#define PARALLEL_BITONIC_B8_KERNEL "ParallelBitonic_B8"
+#define PARALLEL_BITONIC_B16_KERNEL "ParallelBitonic_B16"
+#define PARALLEL_BITONIC_C2_KERNEL "ParallelBitonic_C2"
+#define PARALLEL_BITONIC_C4_KERNEL "ParallelBitonic_C4"
 
 Mat makeLabImage(Mat& image, OpenCL::Device * device) {
     Mat retval(image.width, image.height, device);
@@ -109,20 +119,151 @@ static void medianCut(std::vector<Vec3b>& pal, int num, int lastComponent, std::
     }
 }
 
+static void medianCutGPUQueue(
+    OpenCL::Device& device,
+    OpenCL::Memory<uchar>& buffer,
+    OpenCL::Memory<uchar>& components,
+    OpenCL::Memory<uchar>& result,
+    ulong length, ulong offset, uchar n, int numColors
+) {
+    ulong nparts = length / 128 + (length % 128 ? 1 : 0);
+    if (n >= numColors) {
+        // Average the buckets
+        OpenCL::Memory<uint> temp(device, nparts, 3, false, true);
+        OpenCL::Kernel avgA(device, nparts, "averageKernel_A", buffer, temp, offset, length);
+        OpenCL::Kernel avgB(device, 1, 1, "averageKernel_B", temp, result, (ulong)(n - numColors), length);
+        result.enqueue_read_from_device(); // VERY IMPORTANT LINE, IT BREAKS WITHOUT THIS
+        avgA.enqueue_run();
+        avgB.enqueue_run();
+        return;
+    }
+    // Find maximum range
+    OpenCL::Memory<uchar> intranges_mem(device, nparts, 6, false, true);
+    OpenCL::Kernel rangeA(device, nparts, "calculateRange_A", buffer, intranges_mem, length, offset);
+    OpenCL::Kernel rangeB(device, 1, 1, "calculateRange_B", intranges_mem, components, nparts, n);
+    rangeA.enqueue_run();
+    rangeB.enqueue_run();
+    // Sort entries
+    // Adapted from http://www.bealto.com/gpu-sorting_parallel-bitonic-2.html
+    for (size_t length_ = 1; length_ < length; length_ <<= 1) {
+        long inc = length_;
+        std::list<int> strategy; // vector defining the sequence of reductions
+        {
+            int ii = inc;
+            while (ii > 0) {
+                if (ii == 128 || ii == 32 || ii == 8) {
+                    strategy.push_back(-1);
+                    break;
+                }          // C kernel
+                int d = 1; // default is 1 bit
+                if (0) d = 1;
+                // Force jump to 128
+                else if (ii == 256) d = 1;
+                else if (ii == 512 && (ALLOWB & 4)) d = 2;
+                else if (ii == 1024 && (ALLOWB & 8)) d = 3;
+                else if (ii == 2048 && (ALLOWB & 16)) d = 4;
+                else if (ii >= 8 && (ALLOWB & 16)) d = 4;
+                else if (ii >= 4 && (ALLOWB & 8)) d = 3;
+                else if (ii >= 2 && (ALLOWB & 4)) d = 2;
+                else d = 1;
+                strategy.push_back(d);
+                ii >>= d;
+            }
+        }
+
+        while (inc > 0) {
+            int ninc = 0;
+            std::string kid;
+            int doLocal = 0;
+            int nThreads = 0;
+            int d = strategy.front();
+            strategy.pop_front();
+
+            switch (d) {
+            case -1:
+                kid = PARALLEL_BITONIC_C4_KERNEL;
+                ninc = -1; // reduce all bits
+                doLocal = 4;
+                nThreads = length >> 2;
+                break;
+            case 4:
+                kid = PARALLEL_BITONIC_B16_KERNEL;
+                ninc = 4;
+                nThreads = length >> ninc;
+                break;
+            case 3:
+                kid = PARALLEL_BITONIC_B8_KERNEL;
+                ninc = 3;
+                nThreads = length >> ninc;
+                break;
+            case 2:
+                kid = PARALLEL_BITONIC_B4_KERNEL;
+                ninc = 2;
+                nThreads = length >> ninc;
+                break;
+            case 1:
+                kid = PARALLEL_BITONIC_B2_KERNEL;
+                ninc = 1;
+                nThreads = length >> ninc;
+                break;
+            default: printf("Strategy error!\n"); break;
+            }
+            OpenCL::Kernel kern(device, nThreads, kid, buffer, (int)inc, (int)(length_ << 1), components, n, offset);
+            int wg = kern.get_max_workgroup_size(device);
+            wg = std::min(wg, 256);
+            wg = std::min(wg, nThreads);
+            kern.set_ranges(nThreads, wg);
+            if (doLocal > 0) kern.add_parameters(OpenCL::LocalMemory<uchar>(doLocal * wg * 3));
+            kern.enqueue_run();
+            device.get_cl_queue().enqueueBarrierWithWaitList();
+            if (ninc < 0) break; // done
+            inc >>= ninc;
+        }
+    }
+    // Recurse
+    medianCutGPUQueue(device, buffer, components, result, length / 2, offset, n << 1, numColors);
+    medianCutGPUQueue(device, buffer, components, result, length / 2, offset + length / 2, (n << 1) | 1, numColors);
+}
+
 std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::Device * device) {
     int e = 0;
     if (frexp(numColors, &e) > 0.5) throw std::invalid_argument("color count must be a power of 2");
-    image.download();
-    std::vector<Vec3b> pal;
-    for (int y = 0; y < image.height; y++)
-        for (int x = 0; x < image.width; x++)
-            pal.push_back(Vec3b(image.at(y, x)));
-    std::vector<Vec3b> uniq(pal);
-    uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
-    if (numColors >= uniq.size()) return uniq;
     std::vector<Vec3b> newpal(numColors);
-    medianCut(pal, numColors, -1, newpal.begin());
-    work.wait();
+    if (device != NULL) {
+        image.upload();
+        size_t sz = image.width * image.height;
+        bool diffuse = false;
+        if (sz & (sz - 1)) {
+            diffuse = true;
+            sz = 1 << ((int)log2(sz) + 1);
+        }
+        OpenCL::Memory<uchar> buffer(*device, sz, 3, false, true);
+        OpenCL::Memory<uchar> components(*device, numColors, 3, false, true);
+        OpenCL::Memory<uchar> pal(*device, numColors, 3);
+        device->get_cl_queue().enqueueFillBuffer<uchar>(components.get_cl_buffer(), 255, 0, 1);
+        device->get_cl_queue().enqueueWriteBuffer(buffer.get_cl_buffer(), false, 0, image.width * image.height * 3, image.vec.data());
+        if (diffuse) {
+            float step = (float)sz / (image.width * image.height);
+            OpenCL::Kernel copy(*device, sz - (image.width * image.height), "diffuseKernel", buffer, (ulong)(image.width * image.height), step);
+            copy.enqueue_run();
+        }
+        device->get_cl_queue().enqueueBarrierWithWaitList();
+        medianCutGPUQueue(*device, buffer, components, pal, sz, 0, 1, numColors);
+        pal.enqueue_read_from_device();
+        device->finish_queue();
+        for (int i = 0; i < numColors; i++) newpal[i] = {pal[i*3], pal[i*3+1], pal[i*3+2]};
+    } else {
+        image.download();
+        std::vector<Vec3b> pal;
+        for (int y = 0; y < image.height; y++)
+            for (int x = 0; x < image.width; x++)
+                pal.push_back(Vec3b(image.at(y, x)));
+        std::vector<Vec3b> uniq(pal);
+        uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
+        if (numColors >= uniq.size()) return uniq;
+        medianCut(pal, numColors, -1, newpal.begin());
+        work.wait();
+    }
     // Move the darkest color to 15, and the lightest to 0
     // This fixes some background issues & makes subtitles a bit simpler
     std::vector<Vec3b>::iterator darkest = newpal.begin(), lightest = newpal.begin();
@@ -201,9 +342,9 @@ std::vector<Vec3b> reducePalette_kMeans(Mat& image, int numColors, OpenCL::Devic
     bool changed = true;
     // get initial centroids
     // TODO: optimize
-    image.download();
     std::vector<Vec3b> med = reducePalette_medianCut(image, numColors, device);
     for (int i = 0; i < numColors; i++) colors->push_back(std::make_pair(med[i], std::vector<const Vec3d*>()));
+    image.download();
     // first loop
     // place all colors in nearest bucket
     for (int y = 0; y < image.height; y++) {

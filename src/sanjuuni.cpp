@@ -837,9 +837,9 @@ int main(int argc, const char * argv[]) {
                 Mat labImage = (!useLab || useDefaultPalette) ? rs : makeLabImage(rs, device);
                 std::vector<Vec3b> palette;
                 if (useDefaultPalette) palette = defaultPalette;
-                else if (useOctree) palette = reducePalette_octree(labImage, 16);
-                else if (useKmeans) palette = reducePalette_kMeans(labImage, 16);
-                else palette = reducePalette_medianCut(labImage, 16);
+                else if (useOctree) palette = reducePalette_octree(labImage, 16, device);
+                else if (useKmeans) palette = reducePalette_kMeans(labImage, 16, device);
+                else palette = reducePalette_medianCut(labImage, 16, device);
                 if (noDither) out = thresholdImage(labImage, palette, device);
                 else if (ordered) out = ditherImage_ordered(labImage, palette, device);
                 else out = ditherImage(labImage, palette, device);

@@ -33,6 +33,7 @@
 #define get_global_offset(n) 0
 #define get_group_id(n) 0
 #define get_local_id(n) 0
+#define get_local_size(n) 64
 #define barrier(n) ((void)0)
 #define CLK_LOCAL_MEM_FENCE 0
 
@@ -43,8 +44,8 @@ float3& operator+=(float3& a, const float3& b) {a.x += b.x; a.y += b.y; a.z += b
 float3& operator+=(float3& a, float b) {a.x += b; a.y += b; a.z += b; return a;}
 float3 operator*(const float3& v, float s) {return {v.x * s, v.y * s, v.z * s};}
 int operator==(const float3& a, const float3& b) {return a.x == b.x && a.y == b.y && a.z == b.z;}
-inline uchar3 vload3(int n, uchar * data) {return {data[n*3], data[n*3+1], data[n*3+2]};}
-inline float3 vload3(int n, float * data) {return {data[n*3], data[n*3+1], data[n*3+2]};}
+inline uchar3 vload3(int n, const uchar * data) {return {data[n*3], data[n*3+1], data[n*3+2]};}
+inline float3 vload3(int n, const float * data) {return {data[n*3], data[n*3+1], data[n*3+2]};}
 inline void vstore3(uchar3 v, int n, uchar * data) {data[n*3] = v.x; data[n*3+1] = v.y; data[n*3+2] = v.z;}
 inline void vstore3(float3 v, int n, float * data) {data[n*3] = v.x; data[n*3+1] = v.y; data[n*3+2] = v.z;}
 #endif
@@ -461,4 +462,332 @@ __kernel void copyColors(__global const uchar * input, __global uchar * colors, 
     __private ulong y = get_global_id(0) * 2 / width, x = get_global_id(0) * 2 % width;
     colors[(y-y%3)*width + x*3 + (y%3)*2] = input[y*width+x];
     colors[(y-y%3)*width + x*3 + (y%3)*2 + 1] = input[y*width+x+1];
+}
+
+__kernel void calculateRange_A(__global const uchar * input, __global uchar * ranges, ulong n, ulong offset) {
+    __private ulong i;
+    __private uchar minr = 255, ming = 255, minb = 255, maxr = 0, maxg = 0, maxb = 0, r, g, b;
+    __private int id = get_global_id(0);
+    input += offset * 3;
+    for (i = id * 128; i < (id + 1) * 128 && i < n; i++) {
+        r = input[i*3]; g = input[i*3+1]; b = input[i*3+2];
+        if (r < minr) minr = r;
+        if (g < ming) ming = g;
+        if (b < minb) minb = b;
+        if (r > maxr) maxr = r;
+        if (g > maxg) maxg = g;
+        if (b > maxb) maxb = b;
+    }
+    ranges[id*6] = minr;
+    ranges[id*6+1] = ming;
+    ranges[id*6+2] = minb;
+    ranges[id*6+3] = maxr;
+    ranges[id*6+4] = maxg;
+    ranges[id*6+5] = maxb;
+}
+
+__kernel void calculateRange_B(__global const uchar * input, __global uchar * components, ulong n, uchar id) {
+    __private ulong i;
+    __private uchar minr = 255, ming = 255, minb = 255, maxr = 0, maxg = 0, maxb = 0, ranges[3], maxComponent;
+    for (i = 0; i < n; i++) {
+        if (input[i*6] < minr) minr = input[i*6];
+        if (input[i*6+1] < ming) ming = input[i*6+1];
+        if (input[i*6+2] < minb) minb = input[i*6+2];
+        if (input[i*6+3] > maxr) maxr = input[i*6+3];
+        if (input[i*6+4] > maxg) maxg = input[i*6+4];
+        if (input[i*6+5] > maxb) maxb = input[i*6+5];
+    }
+    ranges[0] = maxr - minr;
+    ranges[1] = maxg - ming;
+    ranges[2] = maxb - minb;
+    if (ranges[0] > ranges[1] && ranges[0] > ranges[2]) maxComponent = 0;
+    else if (ranges[1] > ranges[0] && ranges[1] > ranges[2]) maxComponent = 1;
+    else maxComponent = 2;
+    if (maxComponent == components[id >> 1]) {
+        if (abs((int)ranges[maxComponent] - (int)ranges[(maxComponent+1)%3]) < 8 && abs((int)ranges[maxComponent] - (int)ranges[(maxComponent+2)%3]) < 8)
+            maxComponent = ranges[(maxComponent+1)%3] > ranges[(maxComponent+2)%3] ? (maxComponent + 1) % 3 : (maxComponent + 2) % 3;
+        else if (abs((int)ranges[maxComponent] - (int)ranges[(maxComponent+1)%3]) < 8) maxComponent = (maxComponent + 1) % 3;
+        else if (abs((int)ranges[maxComponent] - (int)ranges[(maxComponent+2)%3]) < 8) maxComponent = (maxComponent + 2) % 3;
+    }
+    components[id] = maxComponent;
+}
+
+__kernel void diffuseKernel(__global uchar * buffer, ulong offset, float step) {
+    vstore3(vload3(get_global_id(0) * step, buffer), offset + get_global_id(0), buffer);
+}
+
+__kernel void averageKernel_A(__global uchar * src, __global uint * result, ulong offset, ulong length) {
+    __private uint r = 0, g = 0, b = 0;
+    __private int i;
+    __private int id = get_global_id(0);
+    src += offset * 3;
+    for (i = id * 128; i < (id + 1) * 128 && i < length; i++) {
+        r += src[i*3]; g += src[i*3+1]; b += src[i*3+2];
+    }
+    result[id*3] = r; result[id*3+1] = g; result[id*3+2] = b;
+}
+
+__kernel void averageKernel_B(__global uint * src, __global uchar * result, ulong offset, ulong length) {
+    __private uint r = 0, g = 0, b = 0;
+    __private int i;
+    for (i = 0; i < length / 128 + (length % 128 ? 1 : 0); i++) {
+        r += src[i*3]; g += src[i*3+1]; b += src[i*3+2];
+    }
+    result[offset*3] = r / length; result[offset*3+1] = g / length; result[offset*3+2] = b / length;
+}
+
+/* Sorting code from Eric Bainville, BSD-style license */
+/* Retrieved from http://www.bealto.com/gpu-sorting_parallel-bitonic-2.html */
+
+typedef uchar3 data_t;
+
+static uchar getKey(uchar3 v, uchar n) {
+    switch (n) {
+        case 0: return v.x;
+        case 1: return v.y;
+        case 2: return v.z;
+        default: return 0;
+    }
+}
+
+#define ORDER(a,b,c) { bool swap = reverse ^ (getKey(a,c)<getKey(b,c)); data_t auxa = a; data_t auxb = b; a = (swap)?auxb:auxa; b = (swap)?auxa:auxb; }
+
+// N/2 threads
+__kernel void ParallelBitonic_B2(__global uchar *data, int inc, int dir, __constant uchar * components, uchar compid, ulong offset) {
+    int t = get_global_id(0);        // thread index
+    int low = t & (inc - 1);         // low order bits (below INC)
+    int i = (t << 1) - low;          // insert 0 at position INC
+    bool reverse = ((dir & i) == 0); // asc/desc order
+    data += (i + offset) * 3;        // translate to first value
+
+    // Load
+    data_t x0 = vload3(0, data);
+    data_t x1 = vload3(inc, data);
+
+    // Sort
+    ORDER(x0, x1, components[compid])
+
+    // Store
+    vstore3(x0, 0, data);
+    vstore3(x1, inc, data);
+}
+
+// N/4 threads
+__kernel void ParallelBitonic_B4(__global uchar *data, int inc, int dir, __constant uchar * components, uchar compid, ulong offset) {
+    inc >>= 1;
+    int t = get_global_id(0);        // thread index
+    int low = t & (inc - 1);         // low order bits (below INC)
+    int i = ((t - low) << 2) + low;  // insert 00 at position INC
+    bool reverse = ((dir & i) == 0); // asc/desc order
+    data += (i + offset) * 3;        // translate to first value
+
+    // Load
+    data_t x0 = vload3(0, data);
+    data_t x1 = vload3(inc, data);
+    data_t x2 = vload3(2 * inc, data);
+    data_t x3 = vload3(3 * inc, data);
+
+    // Sort
+    ORDER(x0, x2, components[compid])
+    ORDER(x1, x3, components[compid])
+    ORDER(x0, x1, components[compid])
+    ORDER(x2, x3, components[compid])
+
+    // Store
+    vstore3(x0, 0, data);
+    vstore3(x1, inc, data);
+    vstore3(x2, 2 * inc, data);
+    vstore3(x3, 3 * inc, data);
+}
+
+#define ORDERV(x,a,b,c) { bool swap = reverse ^ (getKey(x[a],c)<getKey(x[b],c)); \
+      data_t auxa = x[a]; data_t auxb = x[b]; \
+      x[a] = (swap)?auxb:auxa; x[b] = (swap)?auxa:auxb; }
+#define B2V(x,a,c) { ORDERV(x,a,a+1,c) }
+#define B4V(x,a,c) { for (int i4=0;i4<2;i4++) { ORDERV(x,a+i4,a+i4+2,c) } B2V(x,a,c) B2V(x,a+2,c) }
+#define B8V(x,a,c) { for (int i8=0;i8<4;i8++) { ORDERV(x,a+i8,a+i8+4,c) } B4V(x,a,c) B4V(x,a+4,c) }
+#define B16V(x,a,c) { for (int i16=0;i16<8;i16++) { ORDERV(x,a+i16,a+i16+8,c) } B8V(x,a,c) B8V(x,a+8,c) }
+
+// N/8 threads
+__kernel void ParallelBitonic_B8(__global uchar *data, int inc, int dir, __constant uchar * components, uchar compid, ulong offset) {
+    inc >>= 2;
+    int t = get_global_id(0);        // thread index
+    int low = t & (inc - 1);         // low order bits (below INC)
+    int i = ((t - low) << 3) + low;  // insert 000 at position INC
+    bool reverse = ((dir & i) == 0); // asc/desc order
+    data += (i + offset) * 3;        // translate to first value
+
+    // Load
+    data_t x[8];
+    for (int k = 0; k < 8; k++) x[k] = vload3(k * inc, data);
+
+    // Sort
+    B8V(x, 0, components[compid])
+
+    // Store
+    for (int k = 0; k < 8; k++) vstore3(x[k], k * inc, data);
+}
+
+// N/16 threads
+__kernel void ParallelBitonic_B16(__global uchar *data, int inc, int dir, __constant uchar * components, uchar compid, ulong offset) {
+    inc >>= 3;
+    int t = get_global_id(0);        // thread index
+    int low = t & (inc - 1);         // low order bits (below INC)
+    int i = ((t - low) << 4) + low;  // insert 0000 at position INC
+    bool reverse = ((dir & i) == 0); // asc/desc order
+    data += (i + offset) * 3;        // translate to first value
+
+    // Load
+    data_t x[16];
+    for (int k = 0; k < 16; k++) x[k] = vload3(k * inc, data);
+
+    // Sort
+    B16V(x, 0, components[compid])
+
+    // Store
+    for (int k = 0; k < 16; k++) vstore3(x[k], k * inc, data);
+}
+
+// N/2 threads, AUX[2*WG]
+__kernel void ParallelBitonic_C2_pre(__global uchar *data, int inc, int dir, __constant uchar * components, uchar compid, ulong offset, __local uchar *aux) {
+    int t = get_global_id(0); // thread index
+    data += offset * 3;
+
+    // Terminate the INC loop inside the workgroup
+    for (; inc > 0; inc >>= 1) {
+        int low = t & (inc - 1);         // low order bits (below INC)
+        int i = (t << 1) - low;          // insert 0 at position INC
+        bool reverse = ((dir & i) == 0); // asc/desc order
+
+        barrier(CLK_GLOBAL_MEM_FENCE);
+
+        // Load
+        data_t x0 = vload3(i, data);
+        data_t x1 = vload3(i + inc, data);
+
+        // Sort
+        ORDER(x0, x1, components[compid])
+
+        barrier(CLK_GLOBAL_MEM_FENCE);
+
+        // Store
+        vstore3(x0, i, data);
+        vstore3(x1, i + inc, data);
+    }
+}
+
+// N/2 threads, AUX[2*WG]
+__kernel void ParallelBitonic_C2(__global uchar *data, int inc0, int dir, __constant uchar * components, uchar compid, ulong offset, __local uchar *aux) {
+    int t = get_global_id(0);               // thread index
+    int wgBits = 2 * get_local_size(0) - 1; // bit mask to get index in local memory AUX (size is 2*WG)
+    data += offset * 3;
+
+    for (int inc = inc0; inc > 0; inc >>= 1) {
+        int low = t & (inc - 1);         // low order bits (below INC)
+        int i = (t << 1) - low;          // insert 0 at position INC
+        bool reverse = ((dir & i) == 0); // asc/desc order
+        data_t x0, x1;
+
+        // Load
+        if (inc == inc0) {
+            // First iteration: load from global memory
+            x0 = vload3(i, data);
+            x1 = vload3(i + inc, data);
+        } else {
+            // Other iterations: load from local memory
+            barrier(CLK_LOCAL_MEM_FENCE);
+            x0 = vload3(i & wgBits, aux);
+            x1 = vload3((i + inc) & wgBits, aux);
+        }
+
+        // Sort
+        ORDER(x0, x1, components[compid])
+
+        // Store
+        if (inc == 1) {
+            // Last iteration: store to global memory
+            vstore3(x0, i, data);
+            vstore3(x1, i + inc, data);
+        } else {
+            // Other iterations: store to local memory
+            barrier(CLK_LOCAL_MEM_FENCE);
+            vstore3(x0, i & wgBits, aux);
+            vstore3(x1, (i + inc) & wgBits, aux);
+        }
+    }
+}
+
+// N/4 threads, AUX[4*WG]
+__kernel void ParallelBitonic_C4_0(__global uchar *data, int inc0, int dir, __constant uchar * components, uchar compid, ulong offset, __local uchar *aux) {
+    int t = get_global_id(0);               // thread index
+    int wgBits = 4 * get_local_size(0) - 1; // bit mask to get index in local memory AUX (size is 4*WG)
+    data += offset * 3;
+
+    for (int inc = inc0 >> 1; inc > 0; inc >>= 2) {
+        int low = t & (inc - 1);         // low order bits (below INC)
+        int i = ((t - low) << 2) + low;  // insert 00 at position INC
+        bool reverse = ((dir & i) == 0); // asc/desc order
+        data_t x[4];
+
+        // Load
+        if (inc == inc0 >> 1) {
+            // First iteration: load from global memory
+            for (int k = 0; k < 4; k++) x[k] = vload3(i + k * inc, data);
+        } else {
+            // Other iterations: load from local memory
+            barrier(CLK_LOCAL_MEM_FENCE);
+            for (int k = 0; k < 4; k++) x[k] = vload3((i + k * inc) & wgBits, aux);
+        }
+
+        // Sort
+        B4V(x, 0, components[compid]);
+
+        // Store
+        if (inc == 1) {
+            // Last iteration: store to global memory
+            for (int k = 0; k < 4; k++) vstore3(x[k], i + k * inc, data);
+        } else {
+            // Other iterations: store to local memory
+            barrier(CLK_LOCAL_MEM_FENCE);
+            for (int k = 0; k < 4; k++) vstore3(x[k], (i + k * inc) & wgBits, aux);
+        }
+    }
+}
+
+__kernel void ParallelBitonic_C4(__global uchar *data, int inc0, int dir, __constant uchar * components, uchar compid, ulong offset, __local uchar *aux) {
+    int t = get_global_id(0);               // thread index
+    int wgBits = 4 * get_local_size(0) - 1; // bit mask to get index in local memory AUX (size is 4*WG)
+    int inc, low, i;
+    bool reverse;
+    data_t x[4];
+
+    // First iteration, global input, local output
+    data += offset * 3;
+    inc = inc0 >> 1;
+    low = t & (inc - 1);        // low order bits (below INC)
+    i = ((t - low) << 2) + low; // insert 00 at position INC
+    reverse = ((dir & i) == 0); // asc/desc order
+    for (int k = 0; k < 4; k++) x[k] = vload3(i + k * inc, data);
+    B4V(x, 0, components[compid]);
+    for (int k = 0; k < 4; k++) vstore3(x[k], (i + k * inc) & wgBits, aux);
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    // Internal iterations, local input and output
+    for (; inc > 1; inc >>= 2) {
+        low = t & (inc - 1);        // low order bits (below INC)
+        i = ((t - low) << 2) + low; // insert 00 at position INC
+        reverse = ((dir & i) == 0); // asc/desc order
+        for (int k = 0; k < 4; k++) x[k] = vload3((i + k * inc) & wgBits, aux);
+        B4V(x, 0, components[compid]);
+        barrier(CLK_LOCAL_MEM_FENCE);
+        for (int k = 0; k < 4; k++) vstore3(x[k], (i + k * inc) & wgBits, aux);
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    // Final iteration, local input, global output, INC=1
+    i = t << 2;
+    reverse = ((dir & i) == 0); // asc/desc order
+    for (int k = 0; k < 4; k++) x[k] = vload3((i + k) & wgBits, aux);
+    B4V(x, 0, components[compid]);
+    for (int k = 0; k < 4; k++) vstore3(x[k], i + k, data);
 }
