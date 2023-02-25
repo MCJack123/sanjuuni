@@ -25,7 +25,7 @@
 
 #define ALLOWB (2+4+8)
 
-extern void toLab(const uchar * image, uchar * output);
+extern void toLab(const uchar * image, uchar * output, ulong size);
 
 #define PARALLEL_BITONIC_B2_KERNEL "ParallelBitonic_B2"
 #define PARALLEL_BITONIC_B4_KERNEL "ParallelBitonic_B4"
@@ -39,7 +39,7 @@ Mat makeLabImage(Mat& image, OpenCL::Device * device) {
 #ifdef HAS_OPENCL
     if (device != NULL) {
         image.upload();
-        OpenCL::Kernel kernel(*device, image.width * image.height, "toLab", *image.mem, *retval.mem);
+        OpenCL::Kernel kernel(*device, image.width * image.height, "toLab", *image.mem, *retval.mem, (ulong)(image.width * image.height));
         kernel.run();
         retval.onHost = false;
         retval.onDevice = true;
@@ -49,7 +49,7 @@ Mat makeLabImage(Mat& image, OpenCL::Device * device) {
         retval.onDevice = false;
         for (int y = 0; y < image.height; y++) {
             for (int x = 0; x < image.width; x++) {
-                toLab((uchar*)(image.vec.data() + y * image.width + x), (uchar*)(retval.vec.data() + y * image.width + x));
+                toLab((uchar*)(image.vec.data() + y * image.width + x), (uchar*)(retval.vec.data() + y * image.width + x), image.width * image.height);
             }
         }
 #ifdef HAS_OPENCL
@@ -119,6 +119,7 @@ static void medianCut(std::vector<Vec3b>& pal, int num, int lastComponent, std::
     }
 }
 
+#ifdef HAS_OPENCL
 static void medianCutGPUQueue(
     OpenCL::Device& device,
     OpenCL::Memory<uchar>& buffer,
@@ -224,11 +225,13 @@ static void medianCutGPUQueue(
     medianCutGPUQueue(device, buffer, components, result, length / 2, offset, n << 1, numColors);
     medianCutGPUQueue(device, buffer, components, result, length / 2, offset + length / 2, (n << 1) | 1, numColors);
 }
+#endif
 
 std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::Device * device) {
     int e = 0;
     if (frexp(numColors, &e) > 0.5) throw std::invalid_argument("color count must be a power of 2");
     std::vector<Vec3b> newpal(numColors);
+#ifdef HAS_OPENCL
     if (device != NULL) {
         image.upload();
         size_t sz = image.width * image.height;
@@ -241,10 +244,10 @@ std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::De
         OpenCL::Memory<uchar> components(*device, numColors, 3, false, true);
         OpenCL::Memory<uchar> pal(*device, numColors, 3);
         device->get_cl_queue().enqueueFillBuffer<uchar>(components.get_cl_buffer(), 255, 0, 1);
-        device->get_cl_queue().enqueueWriteBuffer(buffer.get_cl_buffer(), false, 0, image.width * image.height * 3, image.vec.data());
+        device->get_cl_queue().enqueueCopyBuffer(image.mem->get_cl_buffer(), buffer.get_cl_buffer(), 0, 0, image.width * image.height * 3);
         if (diffuse) {
             float step = (float)sz / (image.width * image.height);
-            OpenCL::Kernel copy(*device, sz - (image.width * image.height), "diffuseKernel", buffer, (ulong)(image.width * image.height), step);
+            OpenCL::Kernel copy(*device, sz - (image.width * image.height), "diffuseKernel", buffer, (ulong)(image.width * image.height), (ulong)sz, step);
             copy.enqueue_run();
         }
         device->get_cl_queue().enqueueBarrierWithWaitList();
@@ -253,6 +256,7 @@ std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::De
         device->finish_queue();
         for (int i = 0; i < numColors; i++) newpal[i] = {pal[i*3], pal[i*3+1], pal[i*3+2]};
     } else {
+#endif
         image.download();
         std::vector<Vec3b> pal;
         for (int y = 0; y < image.height; y++)
@@ -263,7 +267,9 @@ std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::De
         if (numColors >= uniq.size()) return uniq;
         medianCut(pal, numColors, -1, newpal.begin());
         work.wait();
+#ifdef HAS_OPENCL
     }
+#endif
     // Move the darkest color to 15, and the lightest to 0
     // This fixes some background issues & makes subtitles a bit simpler
     std::vector<Vec3b>::iterator darkest = newpal.begin(), lightest = newpal.begin();
@@ -322,7 +328,7 @@ static void kMeans_recenter(void* s) {
     kmeans_state * state = (kmeans_state*)s;
     Vec3d sum {0, 0, 0};
     int size = 0;
-    for (const Vec3d* c : (*state->newColors)[state->i].second) {
+    for (const Vec3d* c : (*state->colors)[state->i].second) {
         sum += *c;
         size++;
     }
@@ -334,82 +340,135 @@ static void kMeans_recenter(void* s) {
 }
 
 std::vector<Vec3b> reducePalette_kMeans(Mat& image, int numColors, OpenCL::Device * device) {
-    Vec3d * originalColors = new Vec3d[image.width * image.height];
-    std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> colorsA, colorsB;
-    std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> *colors = &colorsA, *newColors = &colorsB;
-    std::vector<kmeans_state> states(numColors);
-    std::vector<std::mutex*> locks;
-    bool changed = true;
-    // get initial centroids
-    // TODO: optimize
-    std::vector<Vec3b> med = reducePalette_medianCut(image, numColors, device);
-    for (int i = 0; i < numColors; i++) colors->push_back(std::make_pair(med[i], std::vector<const Vec3d*>()));
-    image.download();
-    // first loop
-    // place all colors in nearest bucket
-    for (int y = 0; y < image.height; y++) {
-        for (int x = 0; x < image.width; x++) {
-            Vec3d c = Vec3d(image[y][x]);
-            int nearest = 0;
-            Vec3d v = (*colors)[0].first - c;
-            double dist = sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
-            for (int i = 1; i < numColors; i++) {
-                v = (*colors)[i].first - c;
-                double d = sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
-                if (d < dist) {
-                    nearest = i;
-                    dist = d;
+    std::vector<Vec3b> newpal(numColors);
+#ifdef HAS_OPENCL
+    if (device != NULL) {
+        ulong nparts = (image.width * image.height) / 128 + ((image.width * image.height) % 128 ? 1 : 0);
+        std::vector<Vec3b> basepal = reducePalette_medianCut(image, numColors, device);
+        OpenCL::Memory<uchar> palette(*device, numColors, 3);
+        OpenCL::Memory<uchar> buckets(*device, image.width * image.height, 1, false, true);
+        OpenCL::Memory<uint> avgbuf(*device, nparts * numColors, 4, false, true);
+        OpenCL::Memory<uchar> changed(*device, 1, 1);
+        OpenCL::Kernel bucket(*device, image.width * image.height, "kMeans_bucket_kernel", *image.mem, buckets, palette, (ulong)numColors);
+        OpenCL::Kernel recenterA(*device, nparts * numColors, numColors, "kMeans_recenter_kernel_A", *image.mem, buckets, avgbuf, (ulong)(image.width * image.height), OpenCL::LocalMemory<uchar>(128));
+        OpenCL::Kernel recenterB(*device, numColors, numColors, "kMeans_recenter_kernel_B", avgbuf, palette, nparts, changed);
+        image.upload();
+        for (int i = 0; i < basepal.size(); i++) {
+            palette[i*3] = basepal[i][0];
+            palette[i*3+1] = basepal[i][1];
+            palette[i*3+2] = basepal[i][2];
+        }
+        palette.enqueue_write_to_device();
+        int loop = 0;
+        do {
+            changed[0] = 0;
+            changed.enqueue_write_to_device();
+            bucket.enqueue_run();
+            recenterA.enqueue_run();
+            recenterB.enqueue_run();
+            changed.enqueue_read_from_device();
+            device->finish_queue();
+        } while (changed[0] && loop++ < 100);
+        palette.read_from_device();
+        for (int i = 0; i < numColors; i++) newpal[i] = {palette[i*3], palette[i*3+1], palette[i*3+2]};
+    } else {
+#endif
+        Vec3d * originalColors = new Vec3d[image.width * image.height];
+        std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> colorsA, colorsB;
+        std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> *colors = &colorsA, *newColors = &colorsB;
+        std::vector<kmeans_state> states(numColors);
+        std::vector<std::mutex*> locks;
+        bool changed = true;
+        // get initial centroids
+        // TODO: optimize
+        std::vector<Vec3b> med = reducePalette_medianCut(image, numColors, device);
+        for (int i = 0; i < numColors; i++) colors->push_back(std::make_pair(med[i], std::vector<const Vec3d*>()));
+        image.download();
+        // first loop
+        // place all colors in nearest bucket
+        for (int y = 0; y < image.height; y++) {
+            for (int x = 0; x < image.width; x++) {
+                Vec3d c = Vec3d(image[y][x]);
+                int nearest = 0;
+                Vec3d v = (*colors)[0].first - c;
+                double dist = sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+                for (int i = 1; i < numColors; i++) {
+                    v = (*colors)[i].first - c;
+                    double d = sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+                    if (d < dist) {
+                        nearest = i;
+                        dist = d;
+                    }
                 }
+                originalColors[y*image.width+x] = c;
+                (*colors)[nearest].second.push_back(&originalColors[y*image.width+x]);
             }
-            originalColors[y*image.width+x] = c;
-            (*colors)[nearest].second.push_back(&originalColors[y*image.width+x]);
         }
-    }
-    // generate new centroids
-    for (int i = 0; i < numColors; i++) {
-        states[i].i = i;
-        states[i].numColors = numColors;
-        states[i].locks = &locks;
-        states[i].changed = &changed;
-        Vec3d sum {0, 0, 0};
-        int size = 0;
-        for (const Vec3d* c : (*colors)[i].second) {
-            sum += *c;
-            size++;
-        }
-        sum = size == 0 ? sum : sum / size;
-        newColors->push_back(std::make_pair(sum, std::vector<const Vec3d*>()));
-    }
-    // loop
-    for (int i = 0; i < numColors; i++) locks.push_back(new std::mutex());
-    for (int loop = 0; loop < 100 && changed; loop++) {
-        changed = false;
-        // place all colors in nearest new bucket
-        for (int i = 0; i < numColors; i++) {
-            states[i].colors = colors;
-            states[i].newColors = newColors;
-            work.push(kMeans_bucket, &states[i]);
-        }
-        work.wait();
-        auto tmp = colors;
-        colors = newColors;
-        newColors = tmp;
         // generate new centroids
         for (int i = 0; i < numColors; i++) {
-            states[i].colors = colors;
-            states[i].newColors = newColors;
-            work.push(kMeans_recenter, &states[i]);
+            states[i].i = i;
+            states[i].numColors = numColors;
+            states[i].locks = &locks;
+            states[i].changed = &changed;
+            Vec3d sum {0, 0, 0};
+            int size = 0;
+            for (const Vec3d* c : (*colors)[i].second) {
+                sum += *c;
+                size++;
+            }
+            sum = size == 0 ? sum : sum / size;
+            newColors->push_back(std::make_pair(sum, std::vector<const Vec3d*>()));
         }
-        work.wait();
+        // loop
+        for (int i = 0; i < numColors; i++) locks.push_back(new std::mutex());
+        for (int loop = 0; loop < 100 && changed; loop++) {
+            changed = false;
+            // place all colors in nearest new bucket
+            for (int i = 0; i < numColors; i++) {
+                states[i].colors = colors;
+                states[i].newColors = newColors;
+                work.push(kMeans_bucket, &states[i]);
+            }
+            work.wait();
+            auto tmp = colors;
+            colors = newColors;
+            newColors = tmp;
+            // generate new centroids
+            for (int i = 0; i < numColors; i++) {
+                states[i].colors = colors;
+                states[i].newColors = newColors;
+                work.push(kMeans_recenter, &states[i]);
+            }
+            work.wait();
+        }
+        // make final palette
+        for (int i = 0; i < numColors; i++) {
+            newpal[i] = Vec3b((*newColors)[i].first);
+            delete locks[i];
+        }
+        delete[] originalColors;
+#ifdef HAS_OPENCL
     }
-    // make final palette
-    std::vector<Vec3b> retval;
-    for (int i = 0; i < numColors; i++) {
-        retval.push_back(Vec3b((*newColors)[i].first));
-        delete locks[i];
+#endif
+    // Move the darkest color to 15, and the lightest to 0
+    // This fixes some background issues & makes subtitles a bit simpler
+    std::vector<Vec3b>::iterator darkest = newpal.begin(), lightest = newpal.begin();
+    for (auto it = newpal.begin(); it != newpal.end(); it++) {
+        if ((int)(*it)[0] + (int)(*it)[1] + (int)(*it)[2] < (int)(*darkest)[0] + (int)(*darkest)[1] + (int)(*darkest)[2]) darkest = it;
+        if ((int)(*it)[0] + (int)(*it)[1] + (int)(*it)[2] > (int)(*lightest)[0] + (int)(*lightest)[1] + (int)(*lightest)[2]) lightest = it;
     }
-    delete[] originalColors;
-    return retval;
+    Vec3b d = *darkest, l = *lightest;
+    if (darkest == lightest) newpal.erase(darkest);
+    else if (darkest > lightest) {
+        newpal.erase(darkest);
+        newpal.erase(lightest);
+    } else {
+        newpal.erase(lightest);
+        newpal.erase(darkest);
+    }
+    newpal.insert(newpal.begin(), l);
+    newpal.push_back(d);
+    return newpal;
 }
 
 Vec3b nearestColor(const std::vector<Vec3b>& palette, const Vec3d& color, int* _n) {
@@ -466,16 +525,15 @@ Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device
 Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device) {
     Mat retval(image.width, image.height, device);
     if (device != NULL) {
-        uchar pal[48];
-        for (int i = 0; i < palette.size(); i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
-        OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
+        OpenCL::Memory<uchar> palette_mem(*device, palette.size(), 3);
+        for (int i = 0; i < palette.size(); i++) {palette_mem[i*3] = palette[i][0]; palette_mem[i*3+1] = palette[i][1]; palette_mem[i*3+2] = palette[i][2];}
         OpenCL::Memory<float> error(*device, image.width * (image.height + 1) * 3, 1, false, true);
         OpenCL::Memory<uint> progress(*device, image.height, 1, false, true);
         device->get_cl_queue().enqueueFillBuffer<float>(error.get_cl_buffer(), 0.0f, 0, image.width * (image.height + 1) * 3 * sizeof(float));
         device->get_cl_queue().enqueueFillBuffer<uint>(progress.get_cl_buffer(), 0u, 0, image.height * sizeof(uint));
         palette_mem.enqueue_write_to_device();
         image.upload();
-        OpenCL::Kernel kernel(*device, image.height, "floydSteinbergDither", *image.mem, *retval.mem, palette_mem, (uchar)palette.size(), error, progress, (ulong)image.width);
+        OpenCL::Kernel kernel(*device, image.height, "floydSteinbergDither", *image.mem, *retval.mem, palette_mem, (uchar)palette.size(), error, progress, (ulong)image.width, (ulong)image.height);
         kernel.run();
         retval.onHost = false;
         retval.onDevice = true;
@@ -563,7 +621,7 @@ Mat1b rgbToPaletteImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::D
         OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
         palette_mem.write_to_device();
         image.upload();
-        OpenCL::Kernel kernel(*device, image.width * image.height, "rgbToPaletteKernel", *image.mem, *output.mem, palette_mem, (uchar)palette.size());
+        OpenCL::Kernel kernel(*device, image.width * image.height, "rgbToPaletteKernel", *image.mem, *output.mem, palette_mem, (uchar)palette.size(), (ulong)(image.width * image.height));
         kernel.run();
         output.onHost = false;
         output.onDevice = true;

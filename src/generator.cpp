@@ -32,19 +32,20 @@ struct makeCCImage_state {
     uchar* colors;
     uchar** chars;
     uchar** cols;
-    uchar3 * pal;
+    uchar * pal;
+    ulong size;
 };
 
 static void makeCCImage_worker(void* s) {
     makeCCImage_state * state = (makeCCImage_state*)s;
-    toCCPixel(state->colors + (state->i * 6), *state->chars + state->i, *state->cols + state->i, state->pal);
+    toCCPixel(state->colors + (state->i * 6), *state->chars + state->i, *state->cols + state->i, state->pal, state->size);
     delete state;
 }
 
 void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols, OpenCL::Device * device) {
     int width = input.width - input.width % 2, height = input.height - input.height % 3;
-    uchar3 pal[16];
-    for (int i = 0; i < palette.size() && i < 16; i++) pal[i] = {palette[i][0], palette[i][1], palette[i][2]};
+    uchar pal[48];
+    for (int i = 0; i < palette.size() && i < 16; i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
 #ifdef HAS_OPENCL
     if (device != NULL) {
         *chars = new uchar[(height / 3) * (width / 2)];
@@ -54,9 +55,9 @@ void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars,
             OpenCL::Memory<uchar> colors_mem(*device, height * width / 6, 6, false, true);
             OpenCL::Memory<uchar> chars_mem(*device, (height / 3) * (width / 2), 1, *chars);
             OpenCL::Memory<uchar> cols_mem(*device, (height / 3) * (width / 2), 1, *cols);
-            OpenCL::Memory<uchar> palette_mem(*device, 16, 3, pal);
-            OpenCL::Kernel copykernel(*device, height * width / 2, "copyColors", *input.mem, colors_mem, (ulong)width);
-            OpenCL::Kernel kernel(*device, height * width / 6, "toCCPixel", colors_mem, chars_mem, cols_mem, palette_mem);
+            OpenCL::Memory<uchar> palette_mem(*device, palette.size(), 3, pal);
+            OpenCL::Kernel copykernel(*device, height * width / 2, "copyColors", *input.mem, colors_mem, (ulong)width, (ulong)height);
+            OpenCL::Kernel kernel(*device, height * width / 6, "toCCPixel", colors_mem, chars_mem, cols_mem, palette_mem, (ulong)(width * height));
             palette_mem.enqueue_write_to_device();
             copykernel.enqueue_run();
             kernel.enqueue_run();
@@ -91,7 +92,7 @@ void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars,
         *chars = new uchar[(height / 3) * (width / 2)];
         *cols = new uchar[(height / 3) * (width / 2)];
         for (int i = 0; i < (height / 3) * (width / 2); i++)
-            work.push(makeCCImage_worker, new makeCCImage_state {i, colors, chars, cols, pal});
+            work.push(makeCCImage_worker, new makeCCImage_state {i, colors, chars, cols, pal, (ulong)(width * height)});
         work.wait();
         delete[] colors;
 #ifdef HAS_OPENCL

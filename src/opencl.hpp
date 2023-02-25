@@ -447,7 +447,10 @@ public:
     inline const T operator()(const ulong i) const { return host_buffer[i]; }
     inline const T operator()(const ulong i, const uint dimension) const { return host_buffer[i+(ulong)dimension*N]; } // array of structures
     inline void read_from_device(const bool blocking=true) {
-        if(host_buffer_exists&&device_buffer_exists) cl_queue.enqueueReadBuffer(device_buffer, blocking, 0u, capacity(), (void*)host_buffer);
+        if(host_buffer_exists&&device_buffer_exists) {
+            int res = cl_queue.enqueueReadBuffer(device_buffer, blocking, 0u, capacity(), (void*)host_buffer);
+            if (res != CL_SUCCESS) throw OpenCLException(std::to_string(res));
+        }
     }
     inline void write_to_device(const bool blocking=true) {
         if(host_buffer_exists&&device_buffer_exists) cl_queue.enqueueWriteBuffer(device_buffer, blocking, 0u, capacity(), (void*)host_buffer);
@@ -617,12 +620,14 @@ public:
     }
     inline Kernel& enqueue_run(const uint t=1u, const uint o=0u) {
         for(uint i=0u; i<t; i++) {
-            cl_queue.enqueueNDRangeKernel(cl_kernel, o ? cl::NDRange(o) : cl::NullRange, cl_range_global, cl_range_local);
+            int res = cl_queue.enqueueNDRangeKernel(cl_kernel, o ? cl::NDRange(o) : cl::NullRange, cl_range_global, cl_range_local);
+            if (res != CL_SUCCESS) throw OpenCLException(std::to_string(res));
         }
         return *this;
     }
     inline Kernel& finish_queue() {
-        cl_queue.finish();
+        int res = cl_queue.finish();
+        if (res != CL_SUCCESS) throw OpenCLException(std::to_string(res));
         return *this;
     }
     inline Kernel& run(const uint t=1u) {

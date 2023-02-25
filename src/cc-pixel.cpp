@@ -34,10 +34,11 @@
 #define get_group_id(n) 0
 #define get_local_id(n) 0
 #define get_local_size(n) 64
+#define get_global_size(n) 0
 #define barrier(n) ((void)0)
 #define CLK_LOCAL_MEM_FENCE 0
 
-static float distance(float3 p0, float3 p1) {return sqrt((p1.x - p0.x)*(p1.x - p0.x) + (p1.y - p0.y)*(p1.y - p0.y) + (p1.z - p0.z)*(p1.z - p0.z));}
+static float distance(float3 p0, float3 p1) {return sqrtf((p1.x - p0.x)*(p1.x - p0.x) + (p1.y - p0.y)*(p1.y - p0.y) + (p1.z - p0.z)*(p1.z - p0.z));}
 float3 operator+(const float3& a, const float3& b) {return {a.x + b.x, a.y + b.y, a.z + b.z};}
 float3 operator-(const float3& a, const float3& b) {return {a.x - b.x, a.y - b.y, a.z - b.z};}
 float3& operator+=(float3& a, const float3& b) {a.x += b.x; a.y += b.y; a.z += b.z; return a;}
@@ -54,6 +55,9 @@ inline void vstore3(float3 v, int n, float * data) {data[n*3] = v.x; data[n*3+1]
 /* can't use external functions besides what CLC provides */
 
 __constant uint MAX_LOCAL_SIZE = 256;
+#ifndef NULL
+#define NULL ((void*)0)
+#endif
 
 static uchar getComponent(__private uchar3 c, __private int cmp) {
     switch (cmp) {
@@ -75,9 +79,9 @@ static void ditherCCImage(__private float3 * img, __private float3 a, __private 
         err = img[0] - b;
         img[0] = b;
     }
-    img[1] += err * (7.0f/16.0f);
-    img[2] += err * (5.0f/16.0f);
-    img[3] += err * (1.0f/16.0f);
+    img[1] += err * 0.4375f;
+    img[2] += err * 0.3125f;
+    img[3] += err * 0.0625f;
     /* 1, 0 */
     if (distance(img[1], a) < distance(img[1], b)) {
         err = img[1] - a;
@@ -86,8 +90,8 @@ static void ditherCCImage(__private float3 * img, __private float3 a, __private 
         err = img[1] - b;
         img[1] = b;
     }
-    img[2] += err * (3.0f/16.0f);
-    img[3] += err * (5.0f/16.0f);
+    img[2] += err * 0.1875f;
+    img[3] += err * 0.3125f;
     /* 0, 1 */
     if (distance(img[2], a) < distance(img[2], b)) {
         err = img[2] - a;
@@ -96,9 +100,9 @@ static void ditherCCImage(__private float3 * img, __private float3 a, __private 
         err = img[2] - b;
         img[2] = b;
     }
-    img[3] += err * (7.0f/16.0f);
-    img[4] += err * (5.0f/16.0f);
-    img[5] += err * (1.0f/16.0f);
+    img[3] += err * 0.4375f;
+    img[4] += err * 0.3125f;
+    img[5] += err * 0.0625f;
     /* 1, 1 */
     if (distance(img[3], a) < distance(img[3], b)) {
         err = img[3] - a;
@@ -107,8 +111,8 @@ static void ditherCCImage(__private float3 * img, __private float3 a, __private 
         err = img[3] - b;
         img[3] = b;
     }
-    img[4] += err * (3.0f/16.0f);
-    img[5] += err * (5.0f/16.0f);
+    img[4] += err * 0.1875f;
+    img[5] += err * 0.3125f;
     /* 0, 2 */
     if (distance(img[4], a) < distance(img[4], b)) {
         err = img[4] - a;
@@ -117,7 +121,7 @@ static void ditherCCImage(__private float3 * img, __private float3 a, __private 
         err = img[4] - b;
         img[4] = b;
     }
-    img[5] += err * (7.0f/16.0f);
+    img[5] += err * 0.4375f;
     /* 1, 2 */
     if (distance(img[5], a) < distance(img[5], b)) {
         err = img[5] - a;
@@ -136,7 +140,7 @@ static void ditherCCImage(__private float3 * img, __private float3 a, __private 
 }
 
 /* character: high byte = bg << 4 | fg, low byte = char */
-__kernel void toCCPixel(__global const uchar * colors, __global uchar * character, __global uchar * color, __constant uchar3 * palette) {
+__kernel void toCCPixel(__global const uchar * colors, __global uchar * character, __global uchar * color, __constant uchar * palette, ulong size) {
     __private uchar used_colors[6];
     __private int n_used_colors = 0;
     __private int i, j, tmp, maxComponent;
@@ -149,6 +153,7 @@ __kernel void toCCPixel(__global const uchar * colors, __global uchar * characte
     __private float3 palf[4];
     __private float3 dither_in[6];
     __private uchar dither_out[6];
+    if (get_global_id(0) * 6 >= size) return;
     colors += get_global_id(0) * 6;
     character += get_global_id(0);
     color += get_global_id(0);
@@ -175,9 +180,9 @@ __kernel void toCCPixel(__global const uchar * colors, __global uchar * characte
         *color = fg | (bg << 4);
         break;
     case 3:
-        sums[0] = palette[used_colors[0]].x + palette[used_colors[0]].y + palette[used_colors[0]].z;
-        sums[1] = palette[used_colors[1]].x + palette[used_colors[1]].y + palette[used_colors[1]].z;
-        sums[2] = palette[used_colors[2]].x + palette[used_colors[2]].y + palette[used_colors[2]].z;
+        sums[0] = palette[(used_colors[0])*3+0] + palette[(used_colors[0])*3+1] + palette[(used_colors[0])*3+2];
+        sums[1] = palette[(used_colors[1])*3+0] + palette[(used_colors[1])*3+1] + palette[(used_colors[1])*3+2];
+        sums[2] = palette[(used_colors[2])*3+0] + palette[(used_colors[2])*3+1] + palette[(used_colors[2])*3+2];
         if (sums[0] > sums[1]) {
             tmp = sums[1];
             sums[1] = sums[0];
@@ -202,9 +207,9 @@ __kernel void toCCPixel(__global const uchar * colors, __global uchar * characte
             used_colors[2] = used_colors[1];
             used_colors[1] = tmp;
         }
-        palf[0].x = palette[used_colors[0]].x; palf[0].y = palette[used_colors[0]].y; palf[0].z = palette[used_colors[0]].z;
-        palf[1].x = palette[used_colors[1]].x; palf[1].y = palette[used_colors[1]].y; palf[1].z = palette[used_colors[1]].z;
-        palf[2].x = palette[used_colors[2]].x; palf[2].y = palette[used_colors[2]].y; palf[2].z = palette[used_colors[2]].z;
+        palf[0].x = palette[(used_colors[0])*3+0]; palf[0].y = palette[(used_colors[0])*3+1]; palf[0].z = palette[(used_colors[0])*3+2];
+        palf[1].x = palette[(used_colors[1])*3+0]; palf[1].y = palette[(used_colors[1])*3+1]; palf[1].z = palette[(used_colors[1])*3+2];
+        palf[2].x = palette[(used_colors[2])*3+0]; palf[2].y = palette[(used_colors[2])*3+1]; palf[2].z = palette[(used_colors[2])*3+2];
         color_distances[0] = distance(palf[1], palf[0]);
         color_distances[1] = distance(palf[2], palf[1]);
         color_distances[2] = distance(palf[0], palf[2]);
@@ -219,12 +224,12 @@ __kernel void toCCPixel(__global const uchar * colors, __global uchar * characte
             color_map[used_colors[2]] = used_colors[2];
             fg = used_colors[2]; bg = used_colors[0];
         } else {
-            if ((palette[used_colors[0]].x + palette[used_colors[0]].y + palette[used_colors[0]].z) < 32) {
+            if ((palette[(used_colors[0])*3+0] + palette[(used_colors[0])*3+1] + palette[(used_colors[0])*3+2]) < 32) {
                 color_map[used_colors[0]] = used_colors[1];
                 color_map[used_colors[1]] = used_colors[1];
                 color_map[used_colors[2]] = used_colors[2];
                 fg = used_colors[1]; bg = used_colors[2];
-            } else if ((palette[used_colors[2]].x + palette[used_colors[2]].y + palette[used_colors[2]].z) >= 224) {
+            } else if ((palette[(used_colors[2])*3+0] + palette[(used_colors[2])*3+1] + palette[(used_colors[2])*3+2]) >= 224) {
                 color_map[used_colors[0]] = used_colors[1];
                 color_map[used_colors[1]] = used_colors[2];
                 color_map[used_colors[2]] = used_colors[2];
@@ -256,9 +261,9 @@ __kernel void toCCPixel(__global const uchar * colors, __global uchar * characte
         if (bg == 0xFF) {
             tmp = 0;
             for (i = 0; i < 4; i++) if (used_colors[i] != fg) b[tmp++] = used_colors[i];
-            sums[0] = palette[b[0]].x + palette[b[0]].y + palette[b[0]].z;
-            sums[1] = palette[b[1]].x + palette[b[1]].y + palette[b[1]].z;
-            sums[2] = palette[b[2]].x + palette[b[2]].y + palette[b[2]].z;
+            sums[0] = palette[(b[0])*3+0] + palette[(b[0])*3+1] + palette[(b[0])*3+2];
+            sums[1] = palette[(b[1])*3+0] + palette[(b[1])*3+1] + palette[(b[1])*3+2];
+            sums[2] = palette[(b[2])*3+0] + palette[(b[2])*3+1] + palette[(b[2])*3+2];
             if (sums[0] > sums[1]) {
                 tmp = sums[1];
                 sums[1] = sums[0];
@@ -294,15 +299,15 @@ __kernel void toCCPixel(__global const uchar * colors, __global uchar * characte
                 if (!found) {
                     found = true;
                     b[0] = used_colors[i];
-                    palf[0].x = palette[used_colors[i]].x; palf[0].y = palette[used_colors[i]].y; palf[0].z = palette[used_colors[i]].z;
+                    palf[0].x = palette[(used_colors[i])*3+0]; palf[0].y = palette[(used_colors[i])*3+1]; palf[0].z = palette[(used_colors[i])*3+2];
                 } else {
                     b[1] = used_colors[i];
-                    palf[1].x = palette[used_colors[i]].x; palf[1].y = palette[used_colors[i]].y; palf[1].z = palette[used_colors[i]].z;
+                    palf[1].x = palette[(used_colors[i])*3+0]; palf[1].y = palette[(used_colors[i])*3+1]; palf[1].z = palette[(used_colors[i])*3+2];
                 }
             }
         }
-        palf[2].x = palette[fg].x; palf[2].y = palette[fg].y; palf[2].z = palette[fg].z;
-        palf[3].x = palette[bg].x; palf[3].y = palette[bg].y; palf[3].z = palette[bg].z;
+        palf[2].x = palette[(fg)*3+0]; palf[2].y = palette[(fg)*3+1]; palf[2].z = palette[(fg)*3+2];
+        palf[3].x = palette[(bg)*3+0]; palf[3].y = palette[(bg)*3+1]; palf[3].z = palette[(bg)*3+2];
         if (distance(palf[0], palf[2]) < distance(palf[0], palf[3])) color_map[b[0]] = fg;
         else color_map[b[0]] = bg;
         if (distance(palf[1], palf[2]) < distance(palf[1], palf[3])) color_map[b[1]] = fg;
@@ -317,12 +322,12 @@ __kernel void toCCPixel(__global const uchar * colors, __global uchar * characte
         red.x = green.x = blue.x = 255;
         red.y = green.y = blue.y = 0;
         for (i = 0; i < n_used_colors; i++) {
-            if (palette[used_colors[i]].x < red.x) red.x = palette[used_colors[i]].x;
-            if (palette[used_colors[i]].x > red.y) red.y = palette[used_colors[i]].x;
-            if (palette[used_colors[i]].y < green.x) green.x = palette[used_colors[i]].y;
-            if (palette[used_colors[i]].y > green.y) green.y = palette[used_colors[i]].y;
-            if (palette[used_colors[i]].z < blue.x) blue.x = palette[used_colors[i]].z;
-            if (palette[used_colors[i]].z > blue.y) blue.y = palette[used_colors[i]].z;
+            if (palette[(used_colors[i])*3+0] < red.x) red.x = palette[(used_colors[i])*3+0];
+            if (palette[(used_colors[i])*3+0] > red.y) red.y = palette[(used_colors[i])*3+0];
+            if (palette[(used_colors[i])*3+1] < green.x) green.x = palette[(used_colors[i])*3+1];
+            if (palette[(used_colors[i])*3+1] > green.y) green.y = palette[(used_colors[i])*3+1];
+            if (palette[(used_colors[i])*3+2] < blue.x) blue.x = palette[(used_colors[i])*3+2];
+            if (palette[(used_colors[i])*3+2] > blue.y) blue.y = palette[(used_colors[i])*3+2];
         }
         sums[0] = red.y - red.x; sums[1] = green.y - green.x; sums[2] = blue.y - blue.x;
         if (sums[0] > sums[1] && sums[0] > sums[2]) maxComponent = 0;
@@ -332,8 +337,8 @@ __kernel void toCCPixel(__global const uchar * colors, __global uchar * characte
         for (i = 0; i < 6; i++) dither_out[i] = colors[i];
         for (i = 0; i < 6; i++) {
             tmp = dither_out[i];
-            fg = getComponent(palette[tmp], maxComponent);
-            for (j = i; j > 0 && getComponent(palette[dither_out[j-1]], maxComponent) > fg; j--)
+            fg = palette[tmp*3+maxComponent];
+            for (j = i; j > 0 && palette[dither_out[j-1]*3+maxComponent] > fg; j--)
                 dither_out[j] = dither_out[j-1];
             dither_out[j] = tmp;
         }
@@ -341,14 +346,14 @@ __kernel void toCCPixel(__global const uchar * colors, __global uchar * characte
             if (i < 3) color_map[i] = dither_out[i];
             else b[i - 3] = dither_out[i];
         }
-        dither_in[0].x = palette[colors[0]].x; dither_in[0].y = palette[colors[0]].y; dither_in[0].z = palette[colors[0]].z;
-        dither_in[1].x = palette[colors[1]].x; dither_in[1].y = palette[colors[1]].y; dither_in[1].z = palette[colors[1]].z;
-        dither_in[2].x = palette[colors[2]].x; dither_in[2].y = palette[colors[2]].y; dither_in[2].z = palette[colors[2]].z;
-        dither_in[3].x = palette[colors[3]].x; dither_in[3].y = palette[colors[3]].y; dither_in[3].z = palette[colors[3]].z;
-        dither_in[4].x = palette[colors[4]].x; dither_in[4].y = palette[colors[4]].y; dither_in[4].z = palette[colors[4]].z;
-        dither_in[5].x = palette[colors[5]].x; dither_in[5].y = palette[colors[5]].y; dither_in[5].z = palette[colors[5]].z;
-        palf[0].x = palette[color_map[2]].x; palf[0].y = palette[color_map[2]].y; palf[0].z = palette[color_map[2]].z;
-        palf[1].x = palette[b[2]].x; palf[1].y = palette[b[2]].y; palf[1].z = palette[b[2]].z;
+        dither_in[0].x = palette[(colors[0])*3+0]; dither_in[0].y = palette[(colors[0])*3+1]; dither_in[0].z = palette[(colors[0])*3+2];
+        dither_in[1].x = palette[(colors[1])*3+0]; dither_in[1].y = palette[(colors[1])*3+1]; dither_in[1].z = palette[(colors[1])*3+2];
+        dither_in[2].x = palette[(colors[2])*3+0]; dither_in[2].y = palette[(colors[2])*3+1]; dither_in[2].z = palette[(colors[2])*3+2];
+        dither_in[3].x = palette[(colors[3])*3+0]; dither_in[3].y = palette[(colors[3])*3+1]; dither_in[3].z = palette[(colors[3])*3+2];
+        dither_in[4].x = palette[(colors[4])*3+0]; dither_in[4].y = palette[(colors[4])*3+1]; dither_in[4].z = palette[(colors[4])*3+2];
+        dither_in[5].x = palette[(colors[5])*3+0]; dither_in[5].y = palette[(colors[5])*3+1]; dither_in[5].z = palette[(colors[5])*3+2];
+        palf[0].x = palette[(color_map[2])*3+0]; palf[0].y = palette[(color_map[2])*3+1]; palf[0].z = palette[(color_map[2])*3+2];
+        palf[1].x = palette[(b[2])*3+0]; palf[1].y = palette[(b[2])*3+1]; palf[1].z = palette[(b[2])*3+2];
         ditherCCImage(dither_in, palf[0], palf[1], color_map[2], b[2], dither_out);
         fg = color_map[2]; bg = b[2];
         for (i = 0; i < 5; i++) if (dither_out[i] == fg) ch = ch | (1 << i);
@@ -359,9 +364,10 @@ __kernel void toCCPixel(__global const uchar * colors, __global uchar * characte
     }
 }
 
-__kernel void toLab(__global const uchar * image, __global uchar * output) {
-    __private float r = image[get_global_id(0)*3] / 255.0, g = image[get_global_id(0)*3+1] / 255.0, b = image[get_global_id(0)*3+2] / 255.0;
-    __private float X, Y, Z, L, a, B;
+__kernel void toLab(__global const uchar * image, __global uchar * output, ulong size) {
+    __private float r, g, b, X, Y, Z, L, a, B;
+    if (get_global_id(0) >= size) return;
+    r = image[get_global_id(0)*3] / 255.0; g = image[get_global_id(0)*3+1] / 255.0; b = image[get_global_id(0)*3+2] / 255.0;
     if (r > 0.04045) r = pow((r + 0.055) / 1.055, 2.4);
     else r = r / 12.92;
     if (g > 0.04045) g = pow((g + 0.055) / 1.055, 2.4);
@@ -382,10 +388,11 @@ __kernel void toLab(__global const uchar * image, __global uchar * output) {
     output[get_global_id(0)*3] = L; output[get_global_id(0)*3+1] = a; output[get_global_id(0)*3+2] = B;
 }
 
-static float3 closestPixel(float3 pix, __constant uchar * palette, uchar palette_size) {
+static float3 closestPixel(float3 pix, __constant uchar * palette, uchar palette_size, __global uchar * palette_index) {
     __private uchar i;
     __private float3 closest, col;
     __private float dist;
+    __private uchar index = 0;
     closest.x = palette[0]; closest.y = palette[1]; closest.z = palette[2];
     dist = distance(pix, closest);
     for (i = 1; i < palette_size; i++) {
@@ -393,28 +400,36 @@ static float3 closestPixel(float3 pix, __constant uchar * palette, uchar palette
         if (distance(pix, col) < dist) {
             closest = col;
             dist = distance(pix, col);
+            index = i;
         }
     }
+    if (palette_index != NULL) *palette_index = index;
     return closest;
 }
 
 __kernel void thresholdKernel(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size) {
     __private float3 pix, closest;
     pix.x = image[get_global_id(0)*3]; pix.y = image[get_global_id(0)*3+1]; pix.z = image[get_global_id(0)*3+2];
-    closest = closestPixel(pix, palette, palette_size);
+    closest = closestPixel(pix, palette, palette_size, NULL);
     output[get_global_id(0)*3] = closest.x; output[get_global_id(0)*3+1] = closest.y; output[get_global_id(0)*3+2] = closest.z;
 }
 
-__kernel void floydSteinbergDither(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size, __global float * error, __global uint * progress, ulong width) {
+__kernel void floydSteinbergDither(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size, __global float * error, __global uint * progress, ulong width, ulong height) {
     __private uint x;
     __private float3 pix, closest, err;
     __private uint id = get_global_id(0);
     __private ulong yoff = id*width;
+    /*barrier(CLK_LOCAL_MEM_FENCE);
+    if (id == 0) {
+        for (x = 0; x < get_global_size(0); x++) progress[x] = 0;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);*/
+    if (id >= height) return;
     for (x = 0; x < width;) {
         if (id == 0 || progress[id-1] >= x + 2) {
             pix.x = image[(yoff+x)*3]; pix.y = image[(yoff+x)*3+1]; pix.z = image[(yoff+x)*3+2];
             pix += vload3(yoff + x, error);
-            closest = closestPixel(pix, palette, palette_size);
+            closest = closestPixel(pix, palette, palette_size, NULL);
             output[(yoff+x)*3] = closest.x; output[(yoff+x)*3+1] = closest.y; output[(yoff+x)*3+2] = closest.z;
             err = pix - closest;
             if (x < width - 1) {
@@ -444,12 +459,13 @@ __kernel void orderedDither(__global const uchar * image, __global uchar * outpu
     __private float3 pix, closest;
     pix.x = image[get_global_id(0)*3]; pix.y = image[get_global_id(0)*3+1]; pix.z = image[get_global_id(0)*3+2];
     pix += (float)factor * (thresholdMap[(get_global_id(0) / width) % 8][(get_global_id(0) % width) % 8] / 64.0f - 0.5f);
-    closest = closestPixel(pix, palette, palette_size);
+    closest = closestPixel(pix, palette, palette_size, NULL);
     output[get_global_id(0)*3] = closest.x; output[get_global_id(0)*3+1] = closest.y; output[get_global_id(0)*3+2] = closest.z;
 }
 
-__kernel void rgbToPaletteKernel(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size) {
+__kernel void rgbToPaletteKernel(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size, ulong size) {
     __private uchar i;
+    if (get_global_id(0) >= size) return;
     for (i = 0; i < palette_size; i++) {
         if (image[get_global_id(0)*3] == palette[i*3] && image[get_global_id(0)*3+1] == palette[i*3+1] && image[get_global_id(0)*3+2] == palette[i*3+2]) {
             output[get_global_id(0)] = i;
@@ -458,8 +474,9 @@ __kernel void rgbToPaletteKernel(__global const uchar * image, __global uchar * 
     }
 }
 
-__kernel void copyColors(__global const uchar * input, __global uchar * colors, ulong width) {
+__kernel void copyColors(__global const uchar * input, __global uchar * colors, ulong width, ulong height) {
     __private ulong y = get_global_id(0) * 2 / width, x = get_global_id(0) * 2 % width;
+    if (y >= height) return;
     colors[(y-y%3)*width + x*3 + (y%3)*2] = input[y*width+x];
     colors[(y-y%3)*width + x*3 + (y%3)*2 + 1] = input[y*width+x+1];
 }
@@ -468,6 +485,7 @@ __kernel void calculateRange_A(__global const uchar * input, __global uchar * ra
     __private ulong i;
     __private uchar minr = 255, ming = 255, minb = 255, maxr = 0, maxg = 0, maxb = 0, r, g, b;
     __private int id = get_global_id(0);
+    if (id * 128 >= n) return;
     input += offset * 3;
     for (i = id * 128; i < (id + 1) * 128 && i < n; i++) {
         r = input[i*3]; g = input[i*3+1]; b = input[i*3+2];
@@ -512,7 +530,8 @@ __kernel void calculateRange_B(__global const uchar * input, __global uchar * co
     components[id] = maxComponent;
 }
 
-__kernel void diffuseKernel(__global uchar * buffer, ulong offset, float step) {
+__kernel void diffuseKernel(__global uchar * buffer, ulong offset, ulong size, float step) {
+    if (offset + get_global_id(0) >= size) return;
     vstore3(vload3(get_global_id(0) * step, buffer), offset + get_global_id(0), buffer);
 }
 
@@ -520,6 +539,7 @@ __kernel void averageKernel_A(__global uchar * src, __global uint * result, ulon
     __private uint r = 0, g = 0, b = 0;
     __private int i;
     __private int id = get_global_id(0);
+    if (id * 128 >= length) return;
     src += offset * 3;
     for (i = id * 128; i < (id + 1) * 128 && i < length; i++) {
         r += src[i*3]; g += src[i*3+1]; b += src[i*3+2];
@@ -534,6 +554,52 @@ __kernel void averageKernel_B(__global uint * src, __global uchar * result, ulon
         r += src[i*3]; g += src[i*3+1]; b += src[i*3+2];
     }
     result[offset*3] = r / length; result[offset*3+1] = g / length; result[offset*3+2] = b / length;
+}
+
+__kernel void kMeans_bucket_kernel(__global const uchar * image, __global uchar * buckets, __constant uchar * palette, ulong palette_size) {
+    __private float3 pix;
+    pix.x = image[get_global_id(0)*3]; pix.y = image[get_global_id(0)*3+1]; pix.z = image[get_global_id(0)*3+2];
+    closestPixel(pix, palette, palette_size, buckets + get_global_id(0));
+}
+
+__kernel void kMeans_recenter_kernel_A(__global const uchar * image, __global const uchar * buckets, __global uint * output, ulong length, __local uchar * buckets_aux) {
+    __private uint id = get_group_id(0), color = get_local_id(0), numColors = get_local_size(0), r = 0, g = 0, b = 0, total = 0;
+    __private ulong offset = id * 128;
+    __private int i;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (i = 0; i < 128; i++) buckets_aux[i] = buckets[offset+i];
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (i = 0; i < 128 && i + offset < length; i++) {
+        if (buckets_aux[i] == color) {
+            r += image[(offset+i)*3]; g += image[(offset+i)*3+1]; b += image[(offset+i)*3+2]; total++;
+        }
+    }
+    output[id*numColors*4+color*4] = r;
+    output[id*numColors*4+color*4+1] = g;
+    output[id*numColors*4+color*4+2] = b;
+    output[id*numColors*4+color*4+3] = total;
+}
+
+__kernel void kMeans_recenter_kernel_B(__global const uint * src, __global uchar * palette, ulong nparts, __global uchar * changed) {
+    __private uint color = get_global_id(0), numColors = get_global_size(0), r = 0, g = 0, b = 0, total = 0;
+    __private uchar o_r, o_g, o_b, n_r, n_g, n_b;
+    __private int i;
+    for (i = 0; i < nparts; i++) {
+        r += src[i*numColors*4+color*4];
+        g += src[i*numColors*4+color*4+1];
+        b += src[i*numColors*4+color*4+2];
+        total += src[i*numColors*4+color*4+3];
+    }
+    o_r = palette[color*3];
+    n_r = r / total;
+    palette[color*3] = n_r;
+    o_g = palette[color*3+1];
+    n_g = g / total;
+    palette[color*3+1] = n_g;
+    o_b = palette[color*3+2];
+    n_b = b / total;
+    palette[color*3+2] = n_b;
+    if (o_r != n_r || o_g != n_g || o_b != n_b) *changed = 1;
 }
 
 /* Sorting code from Eric Bainville, BSD-style license */
