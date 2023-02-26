@@ -18,7 +18,7 @@ sanjuuni is available in the Nixpkgs unstable branch. To use it, update your Nix
 
 ```sh
 nix-channel --update
-nix-shell -p pkgs.sanjuuni
+nix-shell -p sanjuuni
 # You will now be in a bash shell with sanjuuni on your path.
 sanjuuni --help # Use sanjuuni like normal
 exit
