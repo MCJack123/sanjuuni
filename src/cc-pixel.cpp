@@ -37,6 +37,7 @@
 #define get_global_size(n) 0
 #define barrier(n) ((void)0)
 #define CLK_LOCAL_MEM_FENCE 0
+#define CLK_GLOBAL_MEM_FENCE 0
 
 static float distance(float3 p0, float3 p1) {return sqrtf((p1.x - p0.x)*(p1.x - p0.x) + (p1.y - p0.y)*(p1.y - p0.y) + (p1.z - p0.z)*(p1.z - p0.z));}
 float3 operator+(const float3& a, const float3& b) {return {a.x + b.x, a.y + b.y, a.z + b.z};}
@@ -419,25 +420,22 @@ __kernel void floydSteinbergDither(__global const uchar * image, __global uchar 
     __private float3 pix, closest, err;
     __private uint id = get_global_id(0);
     __private ulong yoff = id*width;
-    /*barrier(CLK_LOCAL_MEM_FENCE);
-    if (id == 0) {
-        for (x = 0; x < get_global_size(0); x++) progress[x] = 0;
-    }
-    barrier(CLK_LOCAL_MEM_FENCE);*/
-    if (id >= height) return;
-    for (x = 0; x < width;) {
-        if (id == 0 || progress[id-1] >= x + 2) {
-            pix.x = image[(yoff+x)*3]; pix.y = image[(yoff+x)*3+1]; pix.z = image[(yoff+x)*3+2];
-            pix += vload3(yoff + x, error);
-            closest = closestPixel(pix, palette, palette_size, NULL);
-            output[(yoff+x)*3] = closest.x; output[(yoff+x)*3+1] = closest.y; output[(yoff+x)*3+2] = closest.z;
-            err = pix - closest;
-            if (x < width - 1) {
-                vstore3(vload3(yoff + x + 1, error) + (err * 0.3125f), yoff + x + 1, error);
-                vstore3((err * 0.0625f), yoff + width + x + 1, error);
+    for (x = 0; x < width || progress[(get_group_id(0)+1)*get_local_size(0)-1] < width;) {
+        if (x >= width) progress[id] = width + 2;
+        else if (id == 0 || progress[id-1] >= x + 2) {
+            if (id < height) {
+                pix.x = image[(yoff+x)*3]; pix.y = image[(yoff+x)*3+1]; pix.z = image[(yoff+x)*3+2];
+                pix += vload3(yoff + x, error);
+                closest = closestPixel(pix, palette, palette_size, NULL);
+                output[(yoff+x)*3] = closest.x; output[(yoff+x)*3+1] = closest.y; output[(yoff+x)*3+2] = closest.z;
+                err = pix - closest;
+                if (x < width - 1) {
+                    vstore3(vload3(yoff + x + 1, error) + (err * 0.3125f), yoff + x + 1, error);
+                    vstore3((err * 0.0625f), yoff + width + x + 1, error);
+                }
+                if (x > 0) vstore3(vload3(yoff + width + x - 1, error) + (err * 0.125f), yoff + width + x - 1, error);
+                vstore3(vload3(yoff + width + x, error) + (err * 0.1875f), yoff + width + x, error);
             }
-            if (x > 0) vstore3(vload3(yoff + width + x - 1, error) + (err * 0.125f), yoff + width + x - 1, error);
-            vstore3(vload3(yoff + width + x, error) + (err * 0.1875f), yoff + width + x, error);
             x++; progress[id]++;
         }
     }
