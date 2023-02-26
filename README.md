@@ -45,6 +45,7 @@ Requirements:
 * FFmpeg libraries
 * Poco
 * zlib (usually required by Poco)
+* OpenCL (optional, for GPU support)
 
 To build:
 ```sh
