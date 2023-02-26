@@ -43,8 +43,10 @@
 typedef unsigned char uchar;
 typedef unsigned short ushort;
 typedef unsigned int uint;
+#ifndef QT_BEGIN_INCLUDE_NAMESPACE
 typedef int64_t slong;
 typedef uint64_t ulong;
+#endif
 
 namespace OpenCL {
 

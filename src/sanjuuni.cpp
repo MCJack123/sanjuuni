@@ -1014,9 +1014,9 @@ int main(int argc, const char * argv[]) {
 cleanup:
     auto t = system_clock::now() - start;
 #ifdef STATUS_FUNCTION
-    STATUS_FUNCTION(nframe, format_ctx->streams[video_stream]->nb_frames, duration_cast<milliseconds>(t), milliseconds(0), t >= seconds(1) ? floor((double)nframe / duration_cast<seconds>(t).count()) : 0);
+    STATUS_FUNCTION(nframe, nframe, duration_cast<milliseconds>(t), milliseconds(0), t >= seconds(1) ? floor((double)nframe / duration_cast<seconds>(t).count()) : 0);
 #else
-    std::cerr << "\rframe " << nframe << "/" << format_ctx->streams[video_stream]->nb_frames << " (elapsed " << t << ", remaining 00:00, " << floor((double)nframe / duration_cast<seconds>(t).count()) << " fps)\n";
+    std::cerr << "\rframe " << nframe << "/" << nframe << " (elapsed " << t << ", remaining 00:00, " << floor((double)nframe / duration_cast<seconds>(t).count()) << " fps)\n";
 #endif
 #ifdef HAS_OPENCL
     if (device != NULL) delete device;
