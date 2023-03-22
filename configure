@@ -4065,7 +4065,7 @@ then :
   printf "%s\n" "#define HAVE_POCO_NET_HTTPSERVER_H 1" >>confdefs.h
 
 else $as_nop
-  as_fn_error $? "Could not find Poco Net headers." "$LINENO" 5
+  NO_NET=1
 fi
 
 done
@@ -4077,7 +4077,7 @@ then :
   printf "%s\n" "#define HAVE_POCO_NET_HTTPSCLIENTSESSION_H 1" >>confdefs.h
 
 else $as_nop
-  as_fn_error $? "Could not find Poco NetSSL headers." "$LINENO" 5
+  NO_NET=1
 fi
 
 done
@@ -4089,7 +4089,7 @@ then :
   printf "%s\n" "#define HAVE_POCO_CRYPTO_X509CERTIFICATE_H 1" >>confdefs.h
 
 else $as_nop
-  as_fn_error $? "Could not find Poco Crypto headers." "$LINENO" 5
+  NO_NET=1
 fi
 
 done
@@ -4886,7 +4886,8 @@ then :
 else $as_nop
   as_fn_error $? "Could not find Poco Util library." "$LINENO" 5
 fi
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for Poco::Net::HTTPRequest in -lPocoNet" >&5
+if test "x$NO_NET" != "x1"; then
+    { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for Poco::Net::HTTPRequest in -lPocoNet" >&5
 printf %s "checking for Poco::Net::HTTPRequest in -lPocoNet... " >&6; }
 if test ${ac_cv_lib_PocoNet_Poco__Net__HTTPRequest+y}
 then :
@@ -5036,7 +5037,7 @@ then :
 else $as_nop
   as_fn_error $? "Could not find Poco Net library." "$LINENO" 5
 fi
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for Poco::Net::HTTPSClientSession in -lPocoNetSSL" >&5
+    { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for Poco::Net::HTTPSClientSession in -lPocoNetSSL" >&5
 printf %s "checking for Poco::Net::HTTPSClientSession in -lPocoNetSSL... " >&6; }
 if test ${ac_cv_lib_PocoNetSSL_Poco__Net__HTTPSClientSession+y}
 then :
@@ -5186,7 +5187,7 @@ then :
 else $as_nop
   as_fn_error $? "Could not find Poco NetSSL library." "$LINENO" 5
 fi
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for Poco::Crypto::OpenSSLInitializer in -lPocoCrypto" >&5
+    { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for Poco::Crypto::OpenSSLInitializer in -lPocoCrypto" >&5
 printf %s "checking for Poco::Crypto::OpenSSLInitializer in -lPocoCrypto... " >&6; }
 if test ${ac_cv_lib_PocoCrypto_Poco__Crypto__OpenSSLInitializer+y}
 then :
@@ -5336,6 +5337,7 @@ then :
 else $as_nop
   as_fn_error $? "Could not find Poco Crypto library." "$LINENO" 5
 fi
+fi
 if test "x$HAS_OPENCL" != "x0"; then
     { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for library containing clCreateContext" >&5
 printf %s "checking for library containing clCreateContext... " >&6; }
@@ -5399,6 +5401,7 @@ fi
 
 fi
 if test "x$HAS_OPENCL" = "x1"; then CPPFLAGS="$CPPFLAGS -DHAS_OPENCL"; fi
+if test "x$NO_NET" = "x1"; then CPPFLAGS="$CPPFLAGS -DNO_NET"; fi
 
 ac_config_files="$ac_config_files Makefile"
 

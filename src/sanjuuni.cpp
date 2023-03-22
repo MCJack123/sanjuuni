@@ -34,6 +34,7 @@ extern "C" {
 #include <Poco/Util/IntValidator.h>
 #include <Poco/Util/RegExpValidator.h>
 #include <Poco/Util/HelpFormatter.h>
+#ifndef NO_NET
 #include <Poco/Net/Context.h>
 #include <Poco/Net/NetException.h>
 #include <Poco/Net/HTTPClientSession.h>
@@ -45,6 +46,7 @@ extern "C" {
 #include <Poco/Net/HTTPServerRequest.h>
 #include <Poco/Net/HTTPServerResponse.h>
 #include <Poco/Net/WebSocket.h>
+#endif
 #include <chrono>
 #include <iomanip>
 #include <iostream>
@@ -66,7 +68,9 @@ extern "C" {
 
 using namespace std::chrono;
 using namespace Poco::Util;
+#ifndef NO_NET
 using namespace Poco::Net;
+#endif
 
 enum class OutputType {
     Default,
@@ -169,6 +173,7 @@ static Vec3b parseColor(const std::string& str) {
     return {color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF};
 }
 
+#ifndef NO_NET
 class HTTPListener: public HTTPRequestHandler {
 public:
     double *fps;
@@ -311,6 +316,7 @@ public:
         }
     };
 };
+#endif
 
 // Very basic parser - no error checking
 std::unordered_multimap<int, ASSSubtitleEvent> parseASSSubtitles(const std::string& path, double framerate) {
@@ -488,9 +494,11 @@ int main(int argc, const char * argv[]) {
                 else if (option == "nfp") mode = OutputType::NFP;
                 else if (option == "raw") mode = OutputType::Raw;
                 else if (option == "32vid") mode = OutputType::Vid32;
+#ifndef NO_NET
                 else if (option == "http") {mode = OutputType::HTTP; port = std::stoi(arg);}
                 else if (option == "websocket") {mode = OutputType::WebSocket; port = std::stoi(arg);}
                 else if (option == "websocket-client") {mode = OutputType::WebSocket; output = arg; port = 0;}
+#endif
                 else if (option == "blit-image") mode = OutputType::BlitImage;
                 else if (option == "streamed") streamed = true;
                 else if (option == "default-palette") useDefaultPalette = true;
@@ -693,8 +701,10 @@ int main(int argc, const char * argv[]) {
         }
     }
     std::ostream& outstream = (output == "-" || output == "") ? std::cout : outfile;
+#ifndef NO_NET
     HTTPServer * srv = NULL;
     WebSocket* ws = NULL;
+#endif
     std::string videoStream;
     std::vector<Vid32SubtitleEvent*> vid32subs;
     double fps = 0;
@@ -702,6 +712,7 @@ int main(int argc, const char * argv[]) {
     auto start = system_clock::now();
     auto lastUpdate = system_clock::now() - seconds(1);
     bool first = true;
+#ifndef NO_NET
     if (mode == OutputType::HTTP) {
         srv = new HTTPServer(new HTTPListener::Factory(&fps), port);
         srv->start();
@@ -751,6 +762,7 @@ int main(int argc, const char * argv[]) {
             signal(SIGINT, sighandler);
         }
     }
+#endif
 
 #ifdef HAS_OPENCL
     if (!disableOpenCL) {
@@ -1031,6 +1043,7 @@ cleanup:
     if (audio_codec_ctx) avcodec_free_context(&audio_codec_ctx);
     if (dfpwm_codec_ctx) avcodec_free_context(&dfpwm_codec_ctx);
     avformat_close_input(&format_ctx);
+#ifndef NO_NET
     if (ws) {
 #ifdef STATUS_FUNCTION
         if (!externalStop)
@@ -1054,6 +1067,7 @@ cleanup:
         srv->stop();
         delete srv;
     }
+#endif
     if (audioStorage) free(audioStorage);
     audioStorage = NULL;
     audioStorageSize = totalFrames = 0;
