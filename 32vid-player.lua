@@ -442,7 +442,7 @@ for _ = 1, nStreams do
                     if tmppos * 5 + 5 > 32 then n = bit32.extract(math.floor(tmp / 0x1000000), tmppos * 5 - 24, 5)
                     else n = bit32.extract(tmp, tmppos * 5, 5) end
                     tmppos = tmppos - 1
-                    if tmppos < 0 then tmp, pos = unpack:unpack(data, pos) tmppos = 7 end
+                    if tmppos < 0 then tmp, pos = (">I5"):unpack(data, pos) tmppos = 7 end
                     return n
                 end
             end
