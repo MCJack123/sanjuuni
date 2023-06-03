@@ -46,6 +46,7 @@ Requirements:
 * Poco (Foundation and Util required; Net/NetSSL optional)
 * zlib (usually required by Poco)
 * OpenCL (optional, for GPU support)
+* GNU `sed` (installed by default on Linux; `brew install gsed` on Mac)
 
 To build:
 ```sh

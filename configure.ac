@@ -43,7 +43,8 @@ fi
 if test "x$HAS_OPENCL" = "x1"; then CPPFLAGS="$CPPFLAGS -DHAS_OPENCL"; fi
 if test "x$NO_NET" = "x1"; then CPPFLAGS="$CPPFLAGS -DNO_NET"; fi
 
-AC_CHECK_PROGS_FEATURE_CHECK(SED, gsed sed, [[$ac_path_SED --version && ac_cv_path_SED=$ac_path_SED ac_path_SED_found=:]], [AC_MSG_ERROR([Could not find GNU sed. On Mac, try brew install gsed.])])
+AC_CACHE_CHECK([for GNU sed], [ac_cv_path_SED], [AC_PATH_PROGS_FEATURE_CHECK([SED], [sed gsed], [[$ac_path_SED --version > /dev/null 2>/dev/null && ac_cv_path_SED=$ac_path_SED ac_path_SED_found=:]], [AC_MSG_ERROR([Could not find GNU sed. On Mac try brew install gsed.])])])
+AC_SUBST([SED], [$ac_cv_path_SED])
 
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT
