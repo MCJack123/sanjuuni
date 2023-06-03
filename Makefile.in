@@ -3,6 +3,7 @@ CPPFLAGS=@CPPFLAGS@
 CXXFLAGS=@CFLAGS@ @CXXFLAGS@
 LDFLAGS=@LDFLAGS@
 LIBS=@LIBS@
+SED=@SED@
 SDIR=@srcdir@/src
 ODIR=obj
 _OBJ=cc-pixel.o cc-pixel-cl.o generator.o octree.o quantize.o sanjuuni.o
