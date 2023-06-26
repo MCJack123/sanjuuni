@@ -75,6 +75,7 @@ ComputerCraft.
 -uurl, --websocket-client=url   Connect to a WebSocket server to send image/video with audio
 -T, --streamed                  For servers, encode data on-the-fly instead of doing it ahead of time (saves memory at the cost of speed and only one client)
 -p, --default-palette           Use the default CC palette instead of generating an optimized one
+-Ppalette, --palette=palette    Use a custom palette instead of generating one, or lock certain colors
 -t, --threshold                 Use thresholding instead of dithering
 -O, --ordered                   Use ordered dithering
 -L, --lab-color                 Use CIELAB color space for higher quality color conversion
@@ -88,6 +89,8 @@ ComputerCraft.
 -Hsize, --height=size           Resize the image to the specified height
 -h, --help                      Show this help
 ```
+
+Custom palettes are specified as a list of 16 comma-separated 6-digit hex codes, optionally preceeded by `#`. Blank entries can be left empty or filled with an `X`. Example: `#FFFFFF,X,X,X,X,X,X,#999999,777777,X,X,X,X,X,X,#000000`
 
 ### Playback programs
 * `32vid-player.lua` plays back 32vid video/audio files from the disk. Simply give it the file name and it will decode and play the file.

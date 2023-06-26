@@ -58,6 +58,29 @@ Mat makeLabImage(Mat& image, OpenCL::Device * device) {
     return retval;
 }
 
+Vec3b convertColorToLab(const Vec3b& color) {
+    float r, g, b, X, Y, Z, L, a, B;
+    r = color[0] / 255.0; g = color[1] / 255.0; b = color[2] / 255.0;
+    if (r > 0.04045) r = pow((r + 0.055) / 1.055, 2.4);
+    else r = r / 12.92;
+    if (g > 0.04045) g = pow((g + 0.055) / 1.055, 2.4);
+    else g = g / 12.92;
+    if (b > 0.04045) b = pow((b + 0.055) / 1.055, 2.4);
+    else b = b / 12.92;
+    r = r * 100; g = g * 100; b = b * 100;
+    X = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 95.047;
+    Y = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 100.000;
+    Z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 108.883;
+    if (X > 0.008856) X = cbrt(X);
+    else X = (7.787 * X) + (16.0 / 116.0);
+    if (Y > 0.008856) Y = cbrt(Y);
+    else Y = (7.787 * Y) + (16.0 / 116.0);
+    if (Z > 0.008856) Z = cbrt(Z);
+    else Z = (7.787 * Z) + (16.0 / 116.0);
+    L = (116 * Y) - 16; a = 500 * (X - Y) + 128; B = 200 * (Y - Z) + 128;
+    return {floor(L + 0.5), floor(a + 0.5), floor(B + 0.5)};
+}
+
 std::vector<Vec3b> convertLabPalette(const std::vector<Vec3b>& palette) {
     std::vector<Vec3b> pal;
     for (const Vec3b& color : palette) {
@@ -344,7 +367,7 @@ std::vector<Vec3b> reducePalette_kMeans(Mat& image, int numColors, OpenCL::Devic
 #ifdef HAS_OPENCL
     if (device != NULL) {
         ulong nparts = (image.width * image.height) / 128 + ((image.width * image.height) % 128 ? 1 : 0);
-        std::vector<Vec3b> basepal = reducePalette_medianCut(image, numColors, device);
+        std::vector<Vec3b> basepal = reducePalette_medianCut(image, 16, device);
         OpenCL::Memory<uchar> palette(*device, numColors, 3);
         OpenCL::Memory<uchar> buckets(*device, image.width * image.height, 1, false, true);
         OpenCL::Memory<uint> avgbuf(*device, nparts * numColors, 4, false, true);
@@ -353,7 +376,7 @@ std::vector<Vec3b> reducePalette_kMeans(Mat& image, int numColors, OpenCL::Devic
         OpenCL::Kernel recenterA(*device, nparts * numColors, numColors, "kMeans_recenter_kernel_A", *image.mem, buckets, avgbuf, (ulong)(image.width * image.height), OpenCL::LocalMemory<uchar>(128));
         OpenCL::Kernel recenterB(*device, numColors, numColors, "kMeans_recenter_kernel_B", avgbuf, palette, nparts, changed);
         image.upload();
-        for (int i = 0; i < basepal.size(); i++) {
+        for (int i = 0; i < numColors; i++) {
             palette[i*3] = basepal[i][0];
             palette[i*3+1] = basepal[i][1];
             palette[i*3+2] = basepal[i][2];
@@ -381,7 +404,7 @@ std::vector<Vec3b> reducePalette_kMeans(Mat& image, int numColors, OpenCL::Devic
         bool changed = true;
         // get initial centroids
         // TODO: optimize
-        std::vector<Vec3b> med = reducePalette_medianCut(image, numColors, device);
+        std::vector<Vec3b> med = reducePalette_medianCut(image, 16, device);
         for (int i = 0; i < numColors; i++) colors->push_back(std::make_pair(med[i], std::vector<const Vec3d*>()));
         image.download();
         // first loop

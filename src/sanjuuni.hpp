@@ -311,6 +311,12 @@ extern std::vector<Vec3b> reducePalette_octree(Mat& bmp, int numColors, OpenCL::
  */
 extern Mat makeLabImage(Mat& image, OpenCL::Device * device = NULL);
 /**
+ * Converts a single RGB color into a CIELAB color.
+ * @param color The color to convert
+ * @return The color represented in Lab color space
+ */
+extern Vec3b convertColorToLab(const Vec3b& color);
+/**
  * Converts a list of Lab colors into sRGB colors.
  * @param palette The colors to convert
  * @return A new list with all colors converted to RGB

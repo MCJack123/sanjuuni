@@ -461,6 +461,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("websocket-client", "u", "Connect to a WebSocket server to send image/video with audio", false, "url", true).validator(new RegExpValidator("^wss?://(?:[A-Za-z0-9!#$%&'*+\\-\\/=?^_`{|}~]+(?:\\.[A-Za-z0-9!#$%&'*+\\-\\/=?^_`{|}~]+)*|\\[[\x21-\x5A\x5E-\x7E]*\\])(?::\\d+)?(?:/[^/]+)*$")));
     options.addOption(Option("streamed", "T", "For servers, encode data on-the-fly instead of doing it ahead of time (saves memory at the cost of speed, and only one client can connect)"));
     options.addOption(Option("default-palette", "p", "Use the default CC palette instead of generating an optimized one"));
+    options.addOption(Option("palette", "P", "Use a custom palette instead of generating one, or lock certain colors", false, "palette", true).validator(new RegExpValidator("^((#?[0-9a-fA-F]{6}|X?),){15}(#?[0-9a-fA-F]{6}|X)$")));
     options.addOption(Option("threshold", "t", "Use thresholding instead of dithering"));
     options.addOption(Option("ordered", "O", "Use ordered dithering"));
     options.addOption(Option("lab-color", "L", "Use CIELAB color space for higher quality color conversion"));
@@ -481,7 +482,9 @@ int main(int argc, const char * argv[]) {
     bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false, disableOpenCL = false;
     OutputType mode = OutputType::Default;
     int compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
-    int port = 80, width = -1, height = -1, zlibCompression = 5;
+    int port = 80, width = -1, height = -1, zlibCompression = 5, customPaletteCount = 16;
+    Vec3b customPalette[16];
+    uint16_t customPaletteMask = 0;
     try {
         for (int i = 1; i < argc; i++) {
             std::string option, arg;
@@ -502,6 +505,19 @@ int main(int argc, const char * argv[]) {
                 else if (option == "blit-image") mode = OutputType::BlitImage;
                 else if (option == "streamed") streamed = true;
                 else if (option == "default-palette") useDefaultPalette = true;
+                else if (option == "palette") {
+                    for (size_t i = 0, pos = 0, end = arg.find_first_of(','); i < 16; i++, pos = end+1, end = arg.find_first_of(',', end+1)) {
+                        std::string c = arg.substr(pos, end - pos);
+                        if (!c.empty() && c != "X") {
+                            const char * s = c.c_str();
+                            if (*s == '#') s++;
+                            long color = strtol(s, NULL, 16);
+                            customPalette[i] = {color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF};
+                            customPaletteMask |= 1 << i;
+                            customPaletteCount--;
+                        }
+                    }
+                }
                 else if (option == "threshold") noDither = true;
                 else if (option == "ordered") ordered = true;
                 else if (option == "lab-color") useLab = true;
@@ -705,6 +721,9 @@ int main(int argc, const char * argv[]) {
     HTTPServer * srv = NULL;
     WebSocket* ws = NULL;
 #endif
+#ifdef USE_SDL
+    SDL_Window * win = NULL;
+#endif
     std::string videoStream;
     std::vector<Vid32SubtitleEvent*> vid32subs;
     double fps = 0;
@@ -803,7 +822,6 @@ int main(int argc, const char * argv[]) {
 #ifdef USE_SDL
     SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
     SDL_Init(SDL_INIT_VIDEO);
-    SDL_Window * win = NULL;
 #endif
 
     totalFrames = format_ctx->streams[video_stream]->nb_frames;
@@ -848,10 +866,20 @@ int main(int argc, const char * argv[]) {
                 rs.remove_last_line();
                 Mat labImage = (!useLab || useDefaultPalette) ? rs : makeLabImage(rs, device);
                 std::vector<Vec3b> palette;
-                if (useDefaultPalette) palette = defaultPalette;
-                else if (useOctree) palette = reducePalette_octree(labImage, 16, device);
-                else if (useKmeans) palette = reducePalette_kMeans(labImage, 16, device);
+                if (customPaletteMask == 0xFFFF) palette = std::vector<Vec3b>(customPalette, customPalette + 16);
+                else if (useDefaultPalette) palette = defaultPalette;
+                else if (useOctree) palette = reducePalette_octree(labImage, customPaletteCount, device);
+                else if (useKmeans) palette = reducePalette_kMeans(labImage, customPaletteCount, device);
                 else palette = reducePalette_medianCut(labImage, 16, device);
+                if (customPaletteMask && customPaletteCount) {
+                    std::vector<Vec3b> newPalette(16);
+                    for (int i = 0; i < 16; i++) {
+                        if (customPaletteMask & (1 << i)) newPalette[i] = (useLab && !useDefaultPalette) ? convertColorToLab(customPalette[i]) : customPalette[i];
+                        else if (palette.size() == 16) newPalette[i] = palette[i];
+                        else {newPalette[i] = palette.back(); palette.pop_back();}
+                    }
+                    palette = newPalette;
+                }
                 if (noDither) out = thresholdImage(labImage, palette, device);
                 else if (ordered) out = ditherImage_ordered(labImage, palette, device);
                 else out = ditherImage(labImage, palette, device);
@@ -890,7 +918,7 @@ int main(int argc, const char * argv[]) {
 #ifdef USE_SDL
                 if (!win) win = SDL_CreateWindow("Image", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_SHOWN);
                 SDL_Surface * surf = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_BGRA32);
-                for (int i = 0; i < out.vec.size(); i++) ((uint32_t*)surf->pixels)[i] = 0xFF000000 | (out.vec[i][2] << 16) | (out.vec[i][1] << 8) | out.vec[i][0];
+                for (int i = 0; i < out.vec.size(); i++) ((uint32_t*)surf->pixels)[i] = 0xFF000000 | (out.vec[i].z << 16) | (out.vec[i].y << 8) | out.vec[i].x;
                 SDL_BlitSurface(surf, NULL, SDL_GetWindowSurface(win), NULL);
                 SDL_FreeSurface(surf);
                 SDL_UpdateWindowSurface(win);

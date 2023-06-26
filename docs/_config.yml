@@ -1,0 +1,4 @@
+theme: minimal
+show_downloads: true
+gui_version: https://github.com/MCJack123/sanjuuni-ui/releases/latest/download/sanjuuni-ui-Win64.zip
+cli_version: https://github.com/MCJack123/sanjuuni/releases/latest/download/sanjuuni-Win64.zip
