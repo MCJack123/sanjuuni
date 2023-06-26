@@ -4,6 +4,18 @@
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta property="og:site_name" content="{{ site.title | default: site.github.repository_name }}">
+    <meta property="og:title" content="{{ site.title | default: site.github.repository_name }}">
+    <meta property="og:description" content="{{ site.description | default: site.github.project_tagline }}">
+    <meta property="og:url" content="{{ site.url | site.github.repository_url }}">
+    <meta property="twitter:title" content="{{ site.title | default: site.github.repository_name }}">
+    <meta property="twitter:description" content="{{ site.description | default: site.github.project_tagline }}">
+    {% if site.logo %}
+    <meta property="og:image" content="{{site.logo | relative_url}}">
+    <meta property="twitter:image" content="{{site.logo | relative_url}}">
+    <meta property="twitter:card" content="summary_large_index">
+    {% endif %}
+    <meta name="description" content="{{ site.description | default: site.github.project_tagline }}">
 
 {% seo %}
     <link rel="stylesheet" href="{{ "/assets/css/style.css?v=" | append: site.github.build_revision | relative_url }}">
