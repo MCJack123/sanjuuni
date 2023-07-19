@@ -514,5 +514,5 @@ std::string make32vid_cmp(const uchar * characters, const uchar * colors, const 
 }
 
 std::string makeLuaFile(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
-    return "local image, palette = " + makeTable(characters, colors, palette, width, height) + "\n\nterm.clear()\nfor i = 0, #palette do term.setPaletteColor(2^i, table.unpack(palette[i])) end\nfor y, r in ipairs(image) do\n    term.setCursorPos(1, y)\n    term.blit(table.unpack(r))\nend\nread()\nfor i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.setCursorPos(1, 1)\nterm.clear()\n";
+    return "-- Generated with sanjuuni\n-- https://sanjuuni.madefor.cc\nlocal image, palette = " + makeTable(characters, colors, palette, width, height) + "\n\nterm.clear()\nfor i = 0, #palette do term.setPaletteColor(2^i, table.unpack(palette[i])) end\nfor y, r in ipairs(image) do\n    term.setCursorPos(1, y)\n    term.blit(table.unpack(r))\nend\nread()\nfor i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.setCursorPos(1, 1)\nterm.clear()\n";
 }

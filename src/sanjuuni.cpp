@@ -117,6 +117,7 @@ static const std::vector<Vec3b> defaultPalette = {
     {0x11, 0x11, 0x11}
 };
 static const std::string playLua = "'local function b(c)local d,e=http.get('http://'..a..c,nil,true)if not d then error(e)end;local f=d.readAll()d.close()return f end;local g=textutils.unserializeJSON(b('/info'))local h,i={},{}local j=peripheral.find'speaker'term.clear()local k=2;parallel.waitForAll(function()for l=0,g.length-1 do h[l]=b('/video/'..l)if k>0 then k=k-1 end end end,function()pcall(function()for l=0,g.length/g.fps do i[l]=b('/audio/'..l)if k>0 then k=k-1 end end end)end,function()while k>0 do os.pullEvent()end;local m=os.epoch'utc'for l=0,g.length-1 do while not h[l]do os.pullEvent()end;local n=h[l]h[l]=nil;local o,p=assert(load(n,'=frame','t',{}))()for q=0,#p do term.setPaletteColor(2^q,table.unpack(p[q]))end;for r,s in ipairs(o)do term.setCursorPos(1,r)term.blit(table.unpack(s))end;while os.epoch'utc'<m+(l+1)/g.fps*1000 do sleep(1/g.fps)end end end,function()if not j or not j.playAudio then return end;while k>0 do os.pullEvent()end;local t=0;while t<g.length/g.fps do while not i[t]do os.pullEvent()end;local u=i[t]i[t]=nil;u={u:byte(1,-1)}for q=1,#u do u[q]=u[q]-128 end;t=t+1;if not j.playAudio(u)then repeat local v,w=os.pullEvent('speaker_audio_empty')until w==peripheral.getName(j)end end end)for q=0,15 do term.setPaletteColor(2^q,term.nativePaletteColor(2^q))end;term.setBackgroundColor(colors.black)term.setTextColor(colors.white)term.setCursorPos(1,1)term.clear()";
+static const std::string multiMonitorLua = "local monitors=settings.get('sanjuuni.multimonitor')if not monitors or#monitors<height or#monitors[1]<width then term.clear()term.setCursorPos(1,1)print('This image needs monitors to be calibrated before being displayed. Please right-click each monitor in order, from the top left corner to the bottom right corner, going right first, then down.\\n')monitors={}local a={}for b=1,height do monitors[b]={}for c=1,width do local d,e=term.getCursorPos()for f=1,height do term.setCursorPos(3,e+f-1)term.clearLine()for g=1,width do term.blit('\\x8F ',g==c and f==b and'00'or'77','ff')end end;term.setCursorPos(3,e+height)term.write('('..c..', '..b..')')term.setCursorPos(1,e)repeat local d,h=os.pullEvent('monitor_touch')monitors[b][c]=h until not a[h]a[monitors[b][c]]=true;sleep(0.25)end end;settings.set('sanjuuni.multimonitor',monitors)settings.save()print('Calibration complete. Settings have been saved for future use.')end\n";
 
 class HelpException: public OptionException {
 public:
@@ -445,6 +446,43 @@ void renderSubtitles(const std::unordered_multimap<int, ASSSubtitleEvent>& subti
     }
 }
 
+static std::unordered_multimap<int, ASSSubtitleEvent> subtitles;
+static OpenCL::Device * device = NULL;
+static std::string input, output, subtitle, format;
+static bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false, disableOpenCL = false;
+static OutputType mode = OutputType::Default;
+static int compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
+static int port = 80, width = -1, height = -1, zlibCompression = 5, customPaletteCount = 16, monitorWidth = 0, monitorHeight = 0, monitorScale = 1;
+static Vec3b customPalette[16];
+static uint16_t customPaletteMask = 0;
+
+static void convertImage(Mat& rs, uchar ** characters, uchar ** colors, std::vector<Vec3b>& palette, size_t& width, size_t& height, int nframe) {
+    Mat labImage = (!useLab || useDefaultPalette) ? rs : makeLabImage(rs, device);
+    if (customPaletteMask == 0xFFFF) palette = std::vector<Vec3b>(customPalette, customPalette + 16);
+    else if (useDefaultPalette) palette = defaultPalette;
+    else if (useOctree) palette = reducePalette_octree(labImage, customPaletteCount, device);
+    else if (useKmeans) palette = reducePalette_kMeans(labImage, customPaletteCount, device);
+    else palette = reducePalette_medianCut(labImage, 16, device);
+    if (customPaletteMask && customPaletteCount) {
+        std::vector<Vec3b> newPalette(16);
+        for (int i = 0; i < 16; i++) {
+            if (customPaletteMask & (1 << i)) newPalette[i] = (useLab && !useDefaultPalette) ? convertColorToLab(customPalette[i]) : customPalette[i];
+            else if (palette.size() == 16) newPalette[i] = palette[i];
+            else {newPalette[i] = palette.back(); palette.pop_back();}
+        }
+        palette = newPalette;
+    }
+    Mat out;
+    if (noDither) out = thresholdImage(labImage, palette, device);
+    else if (ordered) out = ditherImage_ordered(labImage, palette, device);
+    else out = ditherImage(labImage, palette, device);
+    Mat1b pimg = rgbToPaletteImage(out, palette, device);
+    if (useLab && !useDefaultPalette) palette = convertLabPalette(palette);
+    makeCCImage(pimg, palette, characters, colors, device);
+    if (!subtitle.empty() && mode != OutputType::Vid32) renderSubtitles(subtitles, nframe, *characters, *colors, palette, pimg.width, pimg.height);
+    width = pimg.width; height = pimg.height;
+}
+
 int main(int argc, const char * argv[]) {
     OptionSet options;
     options.addOption(Option("input", "i", "Input image or video", true, "file", true));
@@ -473,18 +511,12 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("mute", "m", "Remove audio from output"));
     options.addOption(Option("width", "W", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("height", "H", "Resize the image to the specified height", false, "size", true).validator(new IntValidator(1, 65535)));
+    options.addOption(Option("monitor-size", "M", "Split the image into multiple parts for large monitors (images only)", false, "WxH[@S]", false).validator(new RegExpValidator("^[0-9]+x[0-9]+(?:@[0-5](?:\\.5)?)?$")));
     options.addOption(Option("disable-opencl", "", "Disable OpenCL computation; force CPU-only"));
     options.addOption(Option("help", "h", "Show this help"));
     OptionProcessor argparse(options);
     argparse.setUnixStyle(true);
 
-    std::string input, output, subtitle, format;
-    bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false, disableOpenCL = false;
-    OutputType mode = OutputType::Default;
-    int compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
-    int port = 80, width = -1, height = -1, zlibCompression = 5, customPaletteCount = 16;
-    Vec3b customPalette[16];
-    uint16_t customPaletteMask = 0;
     try {
         for (int i = 1; i < argc; i++) {
             std::string option, arg;
@@ -534,12 +566,23 @@ int main(int argc, const char * argv[]) {
                 else if (option == "mute") mute = true;
                 else if (option == "width") width = std::stoi(arg);
                 else if (option == "height") height = std::stoi(arg);
+                else if (option == "monitor-size") {
+                    if (!arg.empty()) {
+                        monitorWidth = std::stoi(arg);
+                        monitorHeight = std::stoi(arg.substr(arg.find_first_of('x') + 1));
+                        size_t pos = arg.find_first_of('@');
+                        if (pos != std::string::npos) monitorScale = std::stod(arg.substr(pos + 1)) * 2;
+                        monitorWidth = round((64*monitorWidth - 20) / (6 * (monitorScale / 2.0))) * 2;
+                        monitorHeight = round((64*monitorHeight - 20) / (9 * (monitorScale / 2.0))) * 3;
+                    } else {monitorWidth = 328; monitorHeight = 243; monitorScale = 1;}
+                }
                 else if (option == "disable-opencl") disableOpenCL = true;
                 else if (option == "help") throw HelpException();
             }
         }
         argparse.checkRequired();
         if (!(mode == OutputType::HTTP || mode == OutputType::WebSocket) && output == "") throw MissingOptionException("Required option not specified: output");
+        if (monitorWidth && mode != OutputType::Default && mode != OutputType::Lua && mode != OutputType::BlitImage) throw InvalidArgumentException("Monitor splitting is only supported on Lua and BIMG outputs.");
     } catch (const OptionException &e) {
         if (e.className() != "HelpException") std::cerr << e.displayText() << "\n";
         HelpFormatter help(options);
@@ -559,7 +602,7 @@ int main(int argc, const char * argv[]) {
         help.setHeader("sanjuuni converts images and videos into a format that can be displayed in ComputerCraft.");
         help.setFooter("sanjuuni is licensed under the GPL license. Get the source at https://github.com/MCJack123/sanjuuni.");
         help.format(e.className() == "HelpException" ? std::cout : std::cerr);
-        return 0;
+        return e.className() != "HelpException";
     }
 
     if (useDFPWM) {
@@ -588,8 +631,6 @@ int main(int argc, const char * argv[]) {
     SwsContext * resize_ctx = NULL;
     SwrContext * resample_ctx = NULL;
     int error, video_stream = -1, audio_stream = -1;
-    std::unordered_multimap<int, ASSSubtitleEvent> subtitles;
-    OpenCL::Device * device = NULL;
     // Open video file
     avdevice_register_all();
     if (!format.empty()) {
@@ -638,7 +679,7 @@ int main(int argc, const char * argv[]) {
         avformat_close_input(&format_ctx);
         return error;
     }
-    if (mode == OutputType::Default) mode = format_ctx->streams[video_stream]->nb_frames > 0 ? OutputType::Raw : OutputType::Lua;
+    if (mode == OutputType::Default) mode = format_ctx->streams[video_stream]->nb_frames > 0 && !monitorWidth ? OutputType::Raw : OutputType::Lua;
     // Open the audio decoder if present
     if (audio_stream >= 0) {
         if (!(audio_codec = avcodec_find_decoder(format_ctx->streams[audio_stream]->codecpar->codec_id))) {
@@ -847,7 +888,6 @@ int main(int argc, const char * argv[]) {
 #endif
                     lastUpdate = now;
                 } else nframe++;
-                Mat out;
                 if (resize_ctx == NULL) {
                     if (width != -1 || height != -1) {
                         width = width == -1 ? height * ((double)frame->width / (double)frame->height) : width;
@@ -855,6 +895,12 @@ int main(int argc, const char * argv[]) {
                     } else {
                         width = frame->width;
                         height = frame->height;
+                    }
+                    if (monitorWidth && width <= monitorWidth && height <= monitorHeight) {
+                        monitorWidth = 0;
+                        monitorHeight = 0;
+                    } else if (monitorWidth && mode == OutputType::Lua) {
+                        outstream << "local width,height=" << ceil((double)width / (double)monitorWidth) << "," << ceil((double)height / (double)monitorHeight) << ";" << multiMonitorLua;
                     }
                     resize_ctx = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format, width, height, AV_PIX_FMT_BGR24, SWS_BICUBIC, NULL, NULL, NULL);
                 }
@@ -864,67 +910,69 @@ int main(int argc, const char * argv[]) {
                 uint8_t * ptrs[3] = {data, data + 1, data + 2};
                 sws_scale(resize_ctx, frame->data, frame->linesize, 0, frame->height, ptrs, stride);
                 rs.remove_last_line();
-                Mat labImage = (!useLab || useDefaultPalette) ? rs : makeLabImage(rs, device);
-                std::vector<Vec3b> palette;
-                if (customPaletteMask == 0xFFFF) palette = std::vector<Vec3b>(customPalette, customPalette + 16);
-                else if (useDefaultPalette) palette = defaultPalette;
-                else if (useOctree) palette = reducePalette_octree(labImage, customPaletteCount, device);
-                else if (useKmeans) palette = reducePalette_kMeans(labImage, customPaletteCount, device);
-                else palette = reducePalette_medianCut(labImage, 16, device);
-                if (customPaletteMask && customPaletteCount) {
-                    std::vector<Vec3b> newPalette(16);
-                    for (int i = 0; i < 16; i++) {
-                        if (customPaletteMask & (1 << i)) newPalette[i] = (useLab && !useDefaultPalette) ? convertColorToLab(customPalette[i]) : customPalette[i];
-                        else if (palette.size() == 16) newPalette[i] = palette[i];
-                        else {newPalette[i] = palette.back(); palette.pop_back();}
+                if (monitorWidth) {
+                    for (int y = 0; y < height; y += monitorHeight) {
+                        for (int x = 0; x < width; x += monitorWidth) {
+                            int mx = x / monitorWidth + 1, my = y / monitorHeight + 1;
+                            int mw = min(width - x, monitorWidth), mh = min(height - y, monitorHeight);
+                            Mat crop(mw, mh, device);
+                            for (int line = 0; line < mh; line++) {
+                                memcpy(crop.vec.data() + line * mw, rs.vec.data() + (y + line) * width + x, mw * sizeof(uchar3));
+                            }
+                            uchar *characters, *colors;
+                            std::vector<Vec3b> palette;
+                            size_t w, h;
+                            convertImage(crop, &characters, &colors, palette, w, h, nframe);
+                            if (mode == OutputType::Lua) outstream << "do local m,i,p=peripheral.wrap(monitors[" << my << "][" << mx << "])," << makeTable(characters, colors, palette, w / 2, h / 3, true) << "m.clear()m.setTextScale(" << (monitorScale / 2.0) << ")for i=0,#p do m.setPaletteColor(2^i,table.unpack(p[i]))end for y,r in ipairs(i)do m.setCursorPos(1,y)m.blit(table.unpack(r))end end\n";
+                            else outstream << makeTable(characters, colors, palette, w / 2, h / 3, binary, true, binary) << (binary ? "," : ",\n");
+                            outstream.flush();
+                            delete[] characters;
+                            delete[] colors;
+                        }
                     }
-                    palette = newPalette;
-                }
-                if (noDither) out = thresholdImage(labImage, palette, device);
-                else if (ordered) out = ditherImage_ordered(labImage, palette, device);
-                else out = ditherImage(labImage, palette, device);
-                Mat1b pimg = rgbToPaletteImage(out, palette, device);
-                if (useLab && !useDefaultPalette) palette = convertLabPalette(palette);
-                uchar *characters, *colors;
-                makeCCImage(pimg, palette, &characters, &colors, device);
-                if (!subtitle.empty() && mode != OutputType::Vid32) renderSubtitles(subtitles, nframe, characters, colors, palette, pimg.width, pimg.height);
-                switch (mode) {
-                case OutputType::Lua: {
-                    outstream << makeLuaFile(characters, colors, palette, pimg.width / 2, pimg.height / 3);
-                    outstream.flush();
-                    break;
-                } case OutputType::NFP: {
-                    outstream << makeNFP(characters, colors, palette, pimg.width / 2, pimg.height / 3);
-                    outstream.flush();
-                    break;
-                } case OutputType::Raw: {
-                    outstream << makeRawImage(characters, colors, palette, pimg.width / 2, pimg.height / 3);
-                    outstream.flush();
-                    break;
-                } case OutputType::BlitImage: {
-                    outstream << makeTable(characters, colors, palette, pimg.width / 2, pimg.height / 3, binary, true, binary) << (binary ? "," : ",\n");
-                    outstream.flush();
-                    break;
-                } case OutputType::Vid32: {
-                    if (compression == VID32_FLAG_VIDEO_COMPRESSION_CUSTOM) videoStream += make32vid_cmp(characters, colors, palette, pimg.width / 2, pimg.height / 3);
-                    else videoStream += make32vid(characters, colors, palette, pimg.width / 2, pimg.height / 3);
-                    renderSubtitles(subtitles, nframe, NULL, NULL, palette, pimg.width, pimg.height, &vid32subs);
-                    break;
-                } case OutputType::HTTP: case OutputType::WebSocket: {
-                    frameStorage.push_back("return " + makeTable(characters, colors, palette, pimg.width / 2, pimg.height / 3, true));
-                    break;
-                }
-                }
+                } else {
+                    uchar *characters, *colors;
+                    std::vector<Vec3b> palette;
+                    size_t w, h;
+                    convertImage(rs, &characters, &colors, palette, w, h, nframe);
+                    switch (mode) {
+                    case OutputType::Lua: {
+                        outstream << makeLuaFile(characters, colors, palette, w / 2, h / 3);
+                        outstream.flush();
+                        break;
+                    } case OutputType::NFP: {
+                        outstream << makeNFP(characters, colors, palette, w / 2, h / 3);
+                        outstream.flush();
+                        break;
+                    } case OutputType::Raw: {
+                        outstream << makeRawImage(characters, colors, palette, w / 2, h / 3);
+                        outstream.flush();
+                        break;
+                    } case OutputType::BlitImage: {
+                        outstream << makeTable(characters, colors, palette, w / 2, h / 3, binary, true, binary) << (binary ? "," : ",\n");
+                        outstream.flush();
+                        break;
+                    } case OutputType::Vid32: {
+                        if (compression == VID32_FLAG_VIDEO_COMPRESSION_CUSTOM) videoStream += make32vid_cmp(characters, colors, palette, w / 2, h / 3);
+                        else videoStream += make32vid(characters, colors, palette, w / 2, h / 3);
+                        renderSubtitles(subtitles, nframe, NULL, NULL, palette, w, h, &vid32subs);
+                        break;
+                    } case OutputType::HTTP: case OutputType::WebSocket: {
+                        frameStorage.push_back("return " + makeTable(characters, colors, palette, w / 2, h / 3, true));
+                        break;
+                    }
+                    }
 #ifdef USE_SDL
-                if (!win) win = SDL_CreateWindow("Image", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_SHOWN);
-                SDL_Surface * surf = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_BGRA32);
-                for (int i = 0; i < out.vec.size(); i++) ((uint32_t*)surf->pixels)[i] = 0xFF000000 | (out.vec[i].z << 16) | (out.vec[i].y << 8) | out.vec[i].x;
-                SDL_BlitSurface(surf, NULL, SDL_GetWindowSurface(win), NULL);
-                SDL_FreeSurface(surf);
-                SDL_UpdateWindowSurface(win);
+                    if (!win) win = SDL_CreateWindow("Image", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_SHOWN);
+                    SDL_Surface * surf = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_BGRA32);
+                    for (int i = 0; i < out.vec.size(); i++) ((uint32_t*)surf->pixels)[i] = 0xFF000000 | (out.vec[i].z << 16) | (out.vec[i].y << 8) | out.vec[i].x;
+                    SDL_BlitSurface(surf, NULL, SDL_GetWindowSurface(win), NULL);
+                    SDL_FreeSurface(surf);
+                    SDL_UpdateWindowSurface(win);
 #endif
-                delete[] characters;
-                delete[] colors;
+                    delete[] characters;
+                    delete[] colors;
+                }
                 if (streamed) {
                     std::unique_lock<std::mutex> lock(streamedLock);
                     streamedNotify.notify_all();
@@ -1048,6 +1096,10 @@ int main(int argc, const char * argv[]) {
         time_t now = time(0);
         struct tm * time = gmtime(&now);
         strftime(timestr, 26, "%FT%T%z", time);
+        if (monitorWidth) {
+            if (binary) outfile << "multiMonitor={width=" << ceil((double)width / (double)monitorWidth) << ",height=" << ceil((double)height / (double)monitorHeight) << ",scale=" << (monitorScale / 2.0) << "},";
+            else outfile << "multiMonitor = {\n    width = " << ceil((double)width / (double)monitorWidth) << ",\n    height = " << ceil((double)height / (double)monitorHeight) << ",\n    scale = " << (monitorScale / 2.0) << "\n},\n";
+        }
         if (binary) outfile << "creator='sanjuuni',version='1.0.0',secondsPerFrame=" << (1.0 / fps) << ",animation=" << (nframe > 1 ? "true" : "false") << ",date='" << timestr << "',title='" << input << "'}";
         else outfile << "creator = 'sanjuuni',\nversion = '1.0.0',\nsecondsPerFrame = " << (1.0 / fps) << ",\nanimation = " << (nframe > 1 ? "true" : "false") << ",\ndate = '" << timestr << "',\ntitle = '" << input << "'\n}\n";
     }

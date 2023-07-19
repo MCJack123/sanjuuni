@@ -548,7 +548,7 @@ Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device
 Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device) {
     Mat retval(image.width, image.height, device);
 #ifdef HAS_OPENCL
-    if (device != NULL) {
+    if (device != NULL && false) {
         ulong progress_size = image.height / WORKGROUP_SIZE * WORKGROUP_SIZE + (image.height % WORKGROUP_SIZE ? WORKGROUP_SIZE : 0);
         OpenCL::Memory<uchar> palette_mem(*device, palette.size(), 3);
         for (int i = 0; i < palette.size(); i++) {palette_mem[i*3] = palette[i][0]; palette_mem[i*3+1] = palette[i][1]; palette_mem[i*3+2] = palette[i][2];}

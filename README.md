@@ -2,8 +2,11 @@
 Converts images and videos into a format that can be displayed in ComputerCraft. Spiritual successor to [juroku](https://github.com/tmpim/juroku), which is hard to build and isn't as flexible.
 
 ## Installation
+### Windows
+Download the latest release from the [releases tab](https://github.com/MCJack123/sanjuuni/releases). This includes the built binary, the Lua player programs, plus all required libraries.
+
 ### Linux
-#### AUR
+#### Arch Linux (AUR)
 
 sanjuuni is available in the Arch User Repository; use your favorite AUR helper to install it:
 ```sh
@@ -62,38 +65,40 @@ usage: ./sanjuuni [options] -i <input> [-o <output> | -s <port> | -w <port> | -u
 sanjuuni converts images and videos into a format that can be displayed in 
 ComputerCraft.
 
--ifile, --input=file            Input image or video
--Sfile, --subtitle=file         ASS-formatted subtitle file to add to the video
--opath, --output=path           Output file path
--l, --lua                       Output a Lua script file (default for images; only does one frame)
--n, --nfp                       Output an NFP format image for use in paint (changes proportions!)
--r, --raw                       Output a rawmode-based image/video file (default for videos)
--b, --blit-image                Output a blit image (BIMG) format image/animation file
--3, --32vid                     Output a 32vid format binary video file with compression + audio
--sport, --http=port             Serve an HTTP server that has each frame split up + a player program
--wport, --websocket=port        Serve a WebSocket that sends the image/video with audio
--uurl, --websocket-client=url   Connect to a WebSocket server to send image/video with audio
--T, --streamed                  For servers, encode data on-the-fly instead of doing it ahead of time (saves memory at the cost of speed and only one client)
--p, --default-palette           Use the default CC palette instead of generating an optimized one
--Ppalette, --palette=palette    Use a custom palette instead of generating one, or lock certain colors
--t, --threshold                 Use thresholding instead of dithering
--O, --ordered                   Use ordered dithering
--L, --lab-color                 Use CIELAB color space for higher quality color conversion
--8, --octree                    Use octree for higher quality color conversion (slower)
--k, --kmeans                    Use k-means for highest quality color conversion (slowest)
--cmode, --compression=mode      Compression type for 32vid videos; available modes: none|lzw|deflate|custom
--B, --binary                    Output blit image files in a more-compressed binary format (requires opening the file in binary mode)
--d, --dfpwm                     Use DFPWM compression on audio
--m, --mute                      Remove audio from output
--Wsize, --width=size            Resize the image to the specified width
--Hsize, --height=size           Resize the image to the specified height
--h, --help                      Show this help
+-ifile, --input=file                   Input image or video
+-Sfile, --subtitle=file                ASS-formatted subtitle file to add to the video
+-opath, --output=path                  Output file path
+-l, --lua                              Output a Lua script file (default for images; only does one frame)
+-n, --nfp                              Output an NFP format image for use in paint (changes proportions!)
+-r, --raw                              Output a rawmode-based image/video file (default for videos)
+-b, --blit-image                       Output a blit image (BIMG) format image/animation file
+-3, --32vid                            Output a 32vid format binary video file with compression + audio
+-sport, --http=port                    Serve an HTTP server that has each frame split up + a player program
+-wport, --websocket=port               Serve a WebSocket that sends the image/video with audio
+-uurl, --websocket-client=url          Connect to a WebSocket server to send image/video with audio
+-T, --streamed                         For servers, encode data on-the-fly instead of doing it ahead of time (saves memory at the cost of speed and only one client)
+-p, --default-palette                  Use the default CC palette instead of generating an optimized one
+-Ppalette, --palette=palette           Use a custom palette instead of generating one, or lock certain colors
+-t, --threshold                        Use thresholding instead of dithering
+-O, --ordered                          Use ordered dithering
+-L, --lab-color                        Use CIELAB color space for higher quality color conversion
+-8, --octree                           Use octree for higher quality color conversion (slower)
+-k, --kmeans                           Use k-means for highest quality color conversion (slowest)
+-cmode, --compression=mode             Compression type for 32vid videos; available modes: none|lzw|deflate|custom
+-B, --binary                           Output blit image files in a more-compressed binary format (requires opening the file in binary mode)
+-d, --dfpwm                            Use DFPWM compression on audio
+-m, --mute                             Remove audio from output
+-Wsize, --width=size                   Resize the image to the specified width
+-Hsize, --height=size                  Resize the image to the specified height
+-M[WxH[@S]], --monitor-size[=WxH[@S]]  Split the image into multiple parts for large monitors (images only)
+-h, --help                             Show this help
 ```
 
-Custom palettes are specified as a list of 16 comma-separated 6-digit hex codes, optionally preceeded by `#`. Blank entries can be left empty or filled with an `X`. Example: `#FFFFFF,X,X,X,X,X,X,#999999,777777,X,X,X,X,X,X,#000000`
+Custom palettes are specified as a list of 16 comma-separated 6-digit hex codes, optionally preceeded by `#`. Blank entries can be left empty or filled with an `X`. Example: `#FFFFFF,X,X,X,X,X,X,#999999,777777,,,,,,,#000000`
 
 ### Playback programs
 * `32vid-player.lua` plays back 32vid video/audio files from the disk. Simply give it the file name and it will decode and play the file.
+* `bimg-player.lua` displays BIMG images or animations. Simply give it the file name and it will decode and play the file.
 * `raw-player.lua` plays back raw video files from the disk. Simply give it the file name and it will decode and play the file.
 * `websocket-player.lua` plays a stream from a sanjuuni WebSocket server. Simply give it the WebSocket URL and it will play the stream, with audio if a speaker is attached.
 
