@@ -28,6 +28,7 @@
 #include <thread>
 #include <functional>
 #include <atomic>
+#include <stdexcept>
 
 #ifdef HAS_OPENCL
 #include "opencl.hpp"
