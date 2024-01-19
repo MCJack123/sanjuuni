@@ -220,7 +220,7 @@ template<typename T> inline T max(T a, T b) {return a > b ? a : b;}
 
 /* 32vid types and constants. */
 #define VID32_FLAG_VIDEO_COMPRESSION_NONE     0x0000
-#define VID32_FLAG_VIDEO_COMPRESSION_LZW      0x0001
+#define VID32_FLAG_VIDEO_COMPRESSION_ANS      0x0001
 #define VID32_FLAG_VIDEO_COMPRESSION_DEFLATE  0x0002
 #define VID32_FLAG_VIDEO_COMPRESSION_CUSTOM   0x0003
 #define VID32_FLAG_AUDIO_COMPRESSION_NONE     0x0000
@@ -253,7 +253,8 @@ struct Vid32Chunk {
         Subtitle,
         Subtitle2,
         Subtitle3,
-        Subtitle4
+        Subtitle4,
+        Combined
     };
 };
 
@@ -266,6 +267,12 @@ struct Vid32SubtitleEvent {
     uint8_t flags;
     uint16_t size;
     char text[];
+};
+
+struct Vid32CombinedFrame {
+    uint32_t size;
+    uint8_t type;
+    uint8_t data[];
 };
 
 struct ASSSubtitleEvent {
@@ -451,3 +458,13 @@ extern std::string make32vid(const uchar * characters, const uchar * colors, con
  * @return The generated 32vid frame
  */
 extern std::string make32vid_cmp(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height);
+/**
+ * Generates a 32vid frame from the specified CC image using the custom ANS compression scheme.
+ * @param characters The character array to use
+ * @param colors The color pair array to use
+ * @param palette The palette for the image
+ * @param width The width of the image in characters
+ * @param height The height of the image in characters
+ * @return The generated 32vid frame
+ */
+extern std::string make32vid_ans(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height);

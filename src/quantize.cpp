@@ -301,8 +301,12 @@ std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::De
         if ((int)(*it)[0] + (int)(*it)[1] + (int)(*it)[2] > (int)(*lightest)[0] + (int)(*lightest)[1] + (int)(*lightest)[2]) lightest = it;
     }
     Vec3b d = *darkest, l = *lightest;
-    if (darkest == lightest) newpal.erase(darkest);
-    else if (darkest > lightest) {
+    if (darkest == lightest) {
+        // All colors are the same, add extra white for subtitles
+        newpal.erase(darkest);
+        newpal.pop_back();
+        //l = {255, 255, 255};
+    } else if (darkest > lightest) {
         newpal.erase(darkest);
         newpal.erase(lightest);
     } else {

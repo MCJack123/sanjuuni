@@ -70,8 +70,8 @@ ComputerCraft.
 -opath, --output=path                  Output file path
 -l, --lua                              Output a Lua script file (default for images; only does one frame)
 -n, --nfp                              Output an NFP format image for use in paint (changes proportions!)
--r, --raw                              Output a rawmode-based image/video file (default for videos)
--b, --blit-image                       Output a blit image (BIMG) format image/animation file
+-r, --raw                              Output a rawmode-based image/video file
+-b, --blit-image                       Output a blit image (BIMG) format image/animation file (default for videos)
 -3, --32vid                            Output a 32vid format binary video file with compression + audio
 -sport, --http=port                    Serve an HTTP server that has each frame split up + a player program
 -wport, --websocket=port               Serve a WebSocket that sends the image/video with audio
@@ -84,8 +84,9 @@ ComputerCraft.
 -L, --lab-color                        Use CIELAB color space for higher quality color conversion
 -8, --octree                           Use octree for higher quality color conversion (slower)
 -k, --kmeans                           Use k-means for highest quality color conversion (slowest)
--cmode, --compression=mode             Compression type for 32vid videos; available modes: none|lzw|deflate|custom
+-cmode, --compression=mode             Compression type for 32vid videos; available modes: none|ans|deflate|custom
 -B, --binary                           Output blit image files in a more-compressed binary format (requires opening the file in binary mode)
+-S, --separate-streams                 Output 32vid files using separate streams (slower to decode)
 -d, --dfpwm                            Use DFPWM compression on audio
 -m, --mute                             Remove audio from output
 -Wsize, --width=size                   Resize the image to the specified width
@@ -98,6 +99,7 @@ Custom palettes are specified as a list of 16 comma-separated 6-digit hex codes,
 
 ### Playback programs
 * `32vid-player.lua` plays back 32vid video/audio files from the disk. Simply give it the file name and it will decode and play the file.
+* `32vid-player-mini.lua` plays back a limited set of 32vid video/audio files from the disk or web in real-time. Simply give it the file name or URL and it will decode and play the file in real-time.
 * `bimg-player.lua` displays BIMG images or animations. Simply give it the file name and it will decode and play the file.
 * `raw-player.lua` plays back raw video files from the disk. Simply give it the file name and it will decode and play the file.
 * `websocket-player.lua` plays a stream from a sanjuuni WebSocket server. Simply give it the WebSocket URL and it will play the stream, with audio if a speaker is attached.
@@ -130,7 +132,7 @@ The 32vid format consists of a number of streams, which can hold video, audio, o
 | 0x0C   | *n*   | List of streams            |
 
 **Flags:**
-* Bits 0-1: Compression for video; 0 = none, 1 = LZW, 2 = DEFLATE, 3 = custom
+* Bits 0-1: Compression for video; 0 = none, 1 = custom ANS, 2 = DEFLATE, 3 = custom
 * Bits 2-3: Compression for audio; 0 = none (PCM), 1 = DFPWM
 * Bit 4: Always set to 1
 
@@ -150,6 +152,7 @@ The 32vid format consists of a number of streams, which can hold video, audio, o
 * 4-7: Additional audio channels if desired
 * 8: Primary subtitles
 * 9-11: Alternate subtitles if desired
+* 12: Combo data stream
 
 #### Video data
 Video data is stored as a list of frames, with each frame consisting of packed pixel data, then colors. Pixel data is stored in a bitstream as 5-bit codes. The low 5 bits correspond to the low 5 bits in the drawing characters, and the character can be derived by adding 128 to the value.
@@ -165,6 +168,9 @@ The code tree is encoded using canonical Huffman codes, with 4 bits per symbol f
 
 Unlike uncompressed frames, the color block is stored in two sections: the foreground colors are coded first, and then the background colors. This is to allow better run-length encoding. Each frame is compressed separately as well, as opposed to LZW and DEFLATE compression.
 
+#### Custom video compression - ANS
+This is a variant of the normal custom format, but uses asymmetrical numeral systems to encode the data. This compresses similarly to the Huffman coding used in normal custom compression, but is easier to decode as it doesn't need to step through each bit (all bits are read at once). The image is also encoded backwards as required by the ANS algorithm.
+
 #### Subtitle events
 | Offset | Bytes | Description                          |
 |--------|-------|--------------------------------------|
@@ -178,6 +184,9 @@ Unlike uncompressed frames, the color block is stored in two sections: the foreg
 | 0x10   | *n*   | Text                                 |
 
 Subtitle streams are arranged as sequences of subtitle events. Events MUST be ordered by start time; decoders are not required to respect events that are out of order.
+
+#### Combined audio/video streams
+This stream format is used to encode audio and video together, which allows real-time decoding of video. It's split into frames of video, audio, and subtitles, which are each prefixed with a 4 byte size, and a 1 byte type code using the stream type codes. A frame only contains a single event of its type: video is one single frame, subtitles are one single event, and audio is a single chunk (which can be any length, ideally around 0.5s). The length field of the stream is used to store the number of frames in the stream. If the file contains a combined stream, it SHOULD NOT contain any other type of stream.
 
 ## Library usage
 It's possible to use much of the core of sanjuuni as a library for other programs. To do this, simply include all files but `sanjuuni.cpp` in your program, and include `sanjuuni.hpp` in the source you want to use sanjuuni in. Then create a global `WorkQueue work` variable in your source, which is used to delegate tasks to threads. Then use any of the functions in `sanjuuni.hpp` as you need. Basic documentation is available in the header.

@@ -23,6 +23,9 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libavdevice/avdevice.h>
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersrc.h>
+#include <libavfilter/buffersink.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
 #include <zlib.h>
@@ -449,9 +452,9 @@ void renderSubtitles(const std::unordered_multimap<int, ASSSubtitleEvent>& subti
 static std::unordered_multimap<int, ASSSubtitleEvent> subtitles;
 static OpenCL::Device * device = NULL;
 static std::string input, output, subtitle, format;
-static bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false, disableOpenCL = false;
+static bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false, disableOpenCL = false, separateStreams = false;
 static OutputType mode = OutputType::Default;
-static int compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
+static int compression = VID32_FLAG_VIDEO_COMPRESSION_ANS;
 static int port = 80, width = -1, height = -1, zlibCompression = 5, customPaletteCount = 16, monitorWidth = 0, monitorHeight = 0, monitorScale = 1;
 static Vec3b customPalette[16];
 static uint16_t customPaletteMask = 0;
@@ -491,8 +494,8 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("output", "o", "Output file path", false, "path", true));
     options.addOption(Option("lua", "l", "Output a Lua script file (default for images; only does one frame)"));
     options.addOption(Option("nfp", "n", "Output an NFP format image for use in paint (changes proportions!)"));
-    options.addOption(Option("raw", "r", "Output a rawmode-based image/video file (default for videos)"));
-    options.addOption(Option("blit-image", "b", "Output a blit image (BIMG) format image/animation file"));
+    options.addOption(Option("raw", "r", "Output a rawmode-based image/video file"));
+    options.addOption(Option("blit-image", "b", "Output a blit image (BIMG) format image/animation file (default for videos)"));
     options.addOption(Option("32vid", "3", "Output a 32vid format binary video file with compression + audio"));
     options.addOption(Option("http", "s", "Serve an HTTP server that has each frame split up + a player program", false, "port", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("websocket", "w", "Serve a WebSocket that sends the image/video with audio", false, "port", true).validator(new IntValidator(1, 65535)));
@@ -505,8 +508,9 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("lab-color", "L", "Use CIELAB color space for higher quality color conversion"));
     options.addOption(Option("octree", "8", "Use octree for higher quality color conversion (slower)"));
     options.addOption(Option("kmeans", "k", "Use k-means for highest quality color conversion (slowest)"));
-    options.addOption(Option("compression", "c", "Compression type for 32vid videos; available modes: none|lzw|deflate|custom", false, "mode", true).validator(new RegExpValidator("^(none|lzw|deflate|custom)$")));
+    options.addOption(Option("compression", "c", "Compression type for 32vid videos; available modes: none|ans|deflate|custom", false, "mode", true).validator(new RegExpValidator("^(none|lzw|deflate|custom)$")));
     options.addOption(Option("binary", "B", "Output blit image files in a more-compressed binary format (requires opening the file in binary mode)"));
+    options.addOption(Option("separate-streams", "S", "Output 32vid files using separate streams (slower to decode)"));
     options.addOption(Option("dfpwm", "d", "Use DFPWM compression on audio"));
     options.addOption(Option("mute", "m", "Remove audio from output"));
     options.addOption(Option("width", "W", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
@@ -557,7 +561,7 @@ int main(int argc, const char * argv[]) {
                 else if (option == "kmeans") useKmeans = true;
                 else if (option == "compression") {
                     if (arg == "none") compression = VID32_FLAG_VIDEO_COMPRESSION_NONE;
-                    else if (arg == "lzw") compression = VID32_FLAG_VIDEO_COMPRESSION_LZW;
+                    else if (arg == "ans") compression = VID32_FLAG_VIDEO_COMPRESSION_ANS;
                     else if (arg == "deflate") compression = VID32_FLAG_VIDEO_COMPRESSION_DEFLATE;
                     else if (arg == "custom") compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
                 }
@@ -630,6 +634,9 @@ int main(int argc, const char * argv[]) {
     const AVCodec * video_codec = NULL, * audio_codec = NULL, * dfpwm_codec = NULL;
     SwsContext * resize_ctx = NULL;
     SwrContext * resample_ctx = NULL;
+    const AVFilter * asetnsamples_filter = NULL, * src_filter = NULL, * sink_filter = NULL;
+    AVFilterContext * asetnsamples_ctx = NULL, * src_ctx = NULL, * sink_ctx = NULL;
+    AVFilterGraph * filter_graph = NULL;
     int error, video_stream = -1, audio_stream = -1;
     // Open video file
     avdevice_register_all();
@@ -679,23 +686,145 @@ int main(int argc, const char * argv[]) {
         avformat_close_input(&format_ctx);
         return error;
     }
-    if (mode == OutputType::Default) mode = format_ctx->streams[video_stream]->nb_frames > 0 && !monitorWidth ? OutputType::Raw : OutputType::Lua;
+    if (mode == OutputType::Default) mode = format_ctx->streams[video_stream]->nb_frames > 0 && !monitorWidth ? OutputType::BlitImage : OutputType::Lua;
+    if (mode == OutputType::Vid32 && !separateStreams) {
+        if (!(filter_graph = avfilter_graph_alloc())) {
+            std::cerr << "Could not allocate filter graph\n";
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if (!(asetnsamples_filter = avfilter_get_by_name("asetnsamples"))) {
+            std::cerr << "Could not find audio filter 'asetnsamples'\n";
+            avfilter_graph_free(&filter_graph);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if (!(src_filter = avfilter_get_by_name("abuffer"))) {
+            std::cerr << "Could not find audio filter 'abuffer'\n";
+            avfilter_graph_free(&filter_graph);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if (!(sink_filter = avfilter_get_by_name("abuffersink"))) {
+            std::cerr << "Could not find audio filter 'abuffersink'\n";
+            avfilter_graph_free(&filter_graph);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if (!(asetnsamples_ctx = avfilter_graph_alloc_filter(filter_graph, asetnsamples_filter, NULL))) {
+            std::cerr << "Could not add audio filter 'asetnsamples'\n";
+            avfilter_graph_free(&filter_graph);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if ((error = avfilter_init_str(asetnsamples_ctx, "n=24000")) < 0) {
+            std::cerr << "Could not initialize audio filter 'asetnsamples'\n";
+            avfilter_free(asetnsamples_ctx);
+            avfilter_graph_free(&filter_graph);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if (!(src_ctx = avfilter_graph_alloc_filter(filter_graph, src_filter, NULL))) {
+            std::cerr << "Could not add audio filter 'abuffer'\n";
+            avfilter_free(asetnsamples_ctx);
+            avfilter_graph_free(&filter_graph);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if ((error = avfilter_init_str(src_ctx, "sample_rate=48000:sample_fmt=u8:channel_layout=mono")) < 0) {
+            std::cerr << "Could not initialize audio filter 'abuffer'\n";
+            avfilter_free(src_ctx);
+            avfilter_free(asetnsamples_ctx);
+            avfilter_graph_free(&filter_graph);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if (!(sink_ctx = avfilter_graph_alloc_filter(filter_graph, sink_filter, NULL))) {
+            std::cerr << "Could not add audio filter 'abuffersink'\n";
+            avfilter_free(src_ctx);
+            avfilter_free(asetnsamples_ctx);
+            avfilter_graph_free(&filter_graph);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if ((error = avfilter_init_str(sink_ctx, NULL)) < 0) {
+            std::cerr << "Could not initialize audio filter 'abuffersink'\n";
+            avfilter_free(sink_ctx);
+            avfilter_free(src_ctx);
+            avfilter_free(asetnsamples_ctx);
+            avfilter_graph_free(&filter_graph);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if ((error = avfilter_link(src_ctx, 0, asetnsamples_ctx, 0)) < 0) {
+            std::cerr << "Could not link audio filter\n";
+            avfilter_free(sink_ctx);
+            avfilter_free(src_ctx);
+            avfilter_free(asetnsamples_ctx);
+            avfilter_graph_free(&filter_graph);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if ((error = avfilter_link(asetnsamples_ctx, 0, sink_ctx, 0)) < 0) {
+            std::cerr << "Could not link audio filter\n";
+            avfilter_free(sink_ctx);
+            avfilter_free(src_ctx);
+            avfilter_free(asetnsamples_ctx);
+            avfilter_graph_free(&filter_graph);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+        if ((error = avfilter_graph_config(filter_graph, NULL)) < 0) {
+            std::cerr << "Could not configure audio filter\n";
+            avfilter_free(sink_ctx);
+            avfilter_free(src_ctx);
+            avfilter_free(asetnsamples_ctx);
+            avfilter_graph_free(&filter_graph);
+            avcodec_free_context(&video_codec_ctx);
+            avformat_close_input(&format_ctx);
+            return 2;
+        }
+    }
     // Open the audio decoder if present
     if (audio_stream >= 0) {
         if (!(audio_codec = avcodec_find_decoder(format_ctx->streams[audio_stream]->codecpar->codec_id))) {
             std::cerr << "Could not find audio codec\n";
+            if (sink_ctx) avfilter_free(sink_ctx);
+            if (src_ctx) avfilter_free(src_ctx);
+            if (asetnsamples_ctx) avfilter_free(asetnsamples_ctx);
+            if (filter_graph) avfilter_graph_free(&filter_graph);
             avcodec_free_context(&video_codec_ctx);
             avformat_close_input(&format_ctx);
             return 2;
         }
         if (!(audio_codec_ctx = avcodec_alloc_context3(audio_codec))) {
             std::cerr << "Could not allocate audio codec context\n";
+            if (sink_ctx) avfilter_free(sink_ctx);
+            if (src_ctx) avfilter_free(src_ctx);
+            if (asetnsamples_ctx) avfilter_free(asetnsamples_ctx);
+            if (filter_graph) avfilter_graph_free(&filter_graph);
             avcodec_free_context(&video_codec_ctx);
             avformat_close_input(&format_ctx);
             return 2;
         }
         if ((error = avcodec_parameters_to_context(audio_codec_ctx, format_ctx->streams[audio_stream]->codecpar)) < 0) {
             std::cerr << "Could not initialize audio codec parameters: " << avErrorString(error) << "\n";
+            if (sink_ctx) avfilter_free(sink_ctx);
+            if (src_ctx) avfilter_free(src_ctx);
+            if (asetnsamples_ctx) avfilter_free(asetnsamples_ctx);
+            if (filter_graph) avfilter_graph_free(&filter_graph);
             avcodec_free_context(&audio_codec_ctx);
             avcodec_free_context(&video_codec_ctx);
             avformat_close_input(&format_ctx);
@@ -703,6 +832,10 @@ int main(int argc, const char * argv[]) {
         }
         if ((error = avcodec_open2(audio_codec_ctx, audio_codec, NULL)) < 0) {
             std::cerr << "Could not open audio codec: " << avErrorString(error) << "\n";
+            if (sink_ctx) avfilter_free(sink_ctx);
+            if (src_ctx) avfilter_free(src_ctx);
+            if (asetnsamples_ctx) avfilter_free(asetnsamples_ctx);
+            if (filter_graph) avfilter_graph_free(&filter_graph);
             avcodec_free_context(&audio_codec_ctx);
             avcodec_free_context(&video_codec_ctx);
             avformat_close_input(&format_ctx);
@@ -714,6 +847,10 @@ int main(int argc, const char * argv[]) {
     if (useDFPWM) {
         if (!(dfpwm_codec = avcodec_find_encoder(AV_CODEC_ID_DFPWM))) {
             std::cerr << "Could not find DFPWM codec\n";
+            if (sink_ctx) avfilter_free(sink_ctx);
+            if (src_ctx) avfilter_free(src_ctx);
+            if (asetnsamples_ctx) avfilter_free(asetnsamples_ctx);
+            if (filter_graph) avfilter_graph_free(&filter_graph);
             avcodec_free_context(&audio_codec_ctx);
             avcodec_free_context(&video_codec_ctx);
             avformat_close_input(&format_ctx);
@@ -721,6 +858,10 @@ int main(int argc, const char * argv[]) {
         }
         if (!(dfpwm_codec_ctx = avcodec_alloc_context3(dfpwm_codec))) {
             std::cerr << "Could not allocate DFPWM codec context\n";
+            if (sink_ctx) avfilter_free(sink_ctx);
+            if (src_ctx) avfilter_free(src_ctx);
+            if (asetnsamples_ctx) avfilter_free(asetnsamples_ctx);
+            if (filter_graph) avfilter_graph_free(&filter_graph);
             avcodec_free_context(&audio_codec_ctx);
             avcodec_free_context(&video_codec_ctx);
             avformat_close_input(&format_ctx);
@@ -732,6 +873,10 @@ int main(int argc, const char * argv[]) {
         dfpwm_codec_ctx->channel_layout = AV_CH_LAYOUT_MONO;
         if ((error = avcodec_open2(dfpwm_codec_ctx, dfpwm_codec, NULL)) < 0) {
             std::cerr << "Could not open DFPWM codec: " << avErrorString(error) << "\n";
+            if (sink_ctx) avfilter_free(sink_ctx);
+            if (src_ctx) avfilter_free(src_ctx);
+            if (asetnsamples_ctx) avfilter_free(asetnsamples_ctx);
+            if (filter_graph) avfilter_graph_free(&filter_graph);
             avcodec_free_context(&dfpwm_codec_ctx);
             avcodec_free_context(&audio_codec_ctx);
             avcodec_free_context(&video_codec_ctx);
@@ -752,6 +897,10 @@ int main(int argc, const char * argv[]) {
             av_frame_free(&frame);
             av_packet_free(&packet);
             avcodec_free_context(&video_codec_ctx);
+            if (sink_ctx) avfilter_free(sink_ctx);
+            if (src_ctx) avfilter_free(src_ctx);
+            if (asetnsamples_ctx) avfilter_free(asetnsamples_ctx);
+            if (filter_graph) avfilter_graph_free(&filter_graph);
             if (audio_codec_ctx) avcodec_free_context(&audio_codec_ctx);
             avformat_close_input(&format_ctx);
             return 1;
@@ -767,8 +916,9 @@ int main(int argc, const char * argv[]) {
 #endif
     std::string videoStream;
     std::vector<Vid32SubtitleEvent*> vid32subs;
+    std::stringstream vid32stream;
     double fps = 0;
-    int nframe = 0;
+    int nframe = 0, nframe_vid32 = 0;
     auto start = system_clock::now();
     auto lastUpdate = system_clock::now() - seconds(1);
     bool first = true;
@@ -870,6 +1020,11 @@ int main(int argc, const char * argv[]) {
         if (packet->stream_index == video_stream) {
             avcodec_send_packet(video_codec_ctx, packet);
             fps = (double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den;
+            if (fps < 1) {
+                std::cerr << "Variable framerate files are not supported.\n";
+                av_packet_unref(packet);
+                goto cleanup;
+            }
             if (first) {
                 if (!subtitle.empty()) subtitles = parseASSSubtitles(subtitle, fps);
                 if (mode == OutputType::Raw) outstream << "32Vid 1.1\n" << fps << "\n";
@@ -903,6 +1058,21 @@ int main(int argc, const char * argv[]) {
                         outstream << "local width,height=" << ceil((double)width / (double)monitorWidth) << "," << ceil((double)height / (double)monitorHeight) << ";" << multiMonitorLua;
                     }
                     resize_ctx = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format, width, height, AV_PIX_FMT_BGR24, SWS_BICUBIC, NULL, NULL, NULL);
+                    if (mode == OutputType::Vid32 && !separateStreams) {
+                        Vid32Chunk combinedChunk;
+                        Vid32Header header;
+                        combinedChunk.nframes = 0;
+                        combinedChunk.type = (uint8_t)Vid32Chunk::Type::Combined;
+                        memcpy(header.magic, "32VD", 4);
+                        header.width = width / 2;
+                        header.height = height / 3;
+                        header.fps = floor(fps + 0.5);
+                        header.nstreams = 1;
+                        header.flags = compression | VID32_FLAG_VIDEO_5BIT_CODES;
+                        if (useDFPWM) header.flags |= VID32_FLAG_AUDIO_COMPRESSION_DFPWM;
+                        outstream.write((char*)&header, 12);
+                        outstream.write((char*)&combinedChunk, 9);
+                    }
                 }
                 Mat rs(width, height+1, device);
                 uint8_t * data = (uint8_t*)rs.vec.data();
@@ -953,9 +1123,44 @@ int main(int argc, const char * argv[]) {
                         outstream.flush();
                         break;
                     } case OutputType::Vid32: {
-                        if (compression == VID32_FLAG_VIDEO_COMPRESSION_CUSTOM) videoStream += make32vid_cmp(characters, colors, palette, w / 2, h / 3);
-                        else videoStream += make32vid(characters, colors, palette, w / 2, h / 3);
-                        renderSubtitles(subtitles, nframe, NULL, NULL, palette, w, h, &vid32subs);
+                        if (separateStreams) {
+                            if (compression == VID32_FLAG_VIDEO_COMPRESSION_CUSTOM) videoStream += make32vid_cmp(characters, colors, palette, w / 2, h / 3);
+                            else if (compression == VID32_FLAG_VIDEO_COMPRESSION_ANS) videoStream += make32vid_ans(characters, colors, palette, w / 2, h / 3);
+                            else videoStream += make32vid(characters, colors, palette, w / 2, h / 3);
+                            renderSubtitles(subtitles, nframe, NULL, NULL, palette, w, h, &vid32subs);
+                        } else {
+                            std::string data;
+                            if (compression == VID32_FLAG_VIDEO_COMPRESSION_CUSTOM) data = make32vid_cmp(characters, colors, palette, w / 2, h / 3);
+                            else if (compression == VID32_FLAG_VIDEO_COMPRESSION_ANS) data = make32vid_ans(characters, colors, palette, w / 2, h / 3);
+                            else data = make32vid(characters, colors, palette, w / 2, h / 3);
+                            if (compression == VID32_FLAG_VIDEO_COMPRESSION_DEFLATE) {
+                                unsigned long size = compressBound(videoStream.size());
+                                uint8_t * buf = new uint8_t[size];
+                                error = compress2(buf, &size, (const uint8_t*)videoStream.c_str(), videoStream.size(), compression);
+                                if (error != Z_OK) {
+                                    std::cerr << "Could not compress video!\n";
+                                    delete[] buf;
+                                    goto cleanup;
+                                }
+                                data = std::string((const char*)buf + 2, size - 6);
+                                delete[] buf;
+                            }
+                            uint32_t size = data.size();
+                            vid32stream.write((const char*)&size, 4);
+                            vid32stream.put((char)Vid32Chunk::Type::Video);
+                            vid32stream.write(data.c_str(), data.size());
+                            nframe_vid32++;
+                            std::vector<Vid32SubtitleEvent*> subs;
+                            renderSubtitles(subtitles, nframe, NULL, NULL, palette, w, h, &subs);
+                            for (Vid32SubtitleEvent * sub : subs) {
+                                size = sizeof(Vid32SubtitleEvent) + sub->size;
+                                vid32stream.write((const char*)&size, 4);
+                                vid32stream.put((char)Vid32Chunk::Type::Subtitle);
+                                vid32stream.write((char*)sub, size);
+                                free(sub);
+                                nframe_vid32++;
+                            }
+                        }
                         break;
                     } case OutputType::HTTP: case OutputType::WebSocket: {
                         frameStorage.push_back("return " + makeTable(characters, colors, palette, w / 2, h / 3, true));
@@ -994,6 +1199,18 @@ int main(int argc, const char * argv[]) {
                     std::cerr << "Failed to convert audio: " << avErrorString(error) << "\n";
                     continue;
                 }
+                if (filter_graph) {
+                    if ((error = av_buffersrc_add_frame(src_ctx, newframe)) < 0) {
+                        std::cerr << "Could not push frame to filter: " << avErrorString(error) << "\n";
+                        continue;
+                    }
+                    AVFrame * newframe2 = av_frame_alloc();
+                    if ((error = av_buffersink_get_frame(sink_ctx, newframe2)) < 0) {
+                        //std::cerr << "Could not pull frame from filter: " << avErrorString(error) << "\n";
+                        continue;
+                    }
+                    newframe = newframe2;
+                }
                 if (useDFPWM) {
                     if ((error = avcodec_send_frame(dfpwm_codec_ctx, newframe)) < 0) {
                         std::cerr << "Could not write DFPWM frame: " << avErrorString(error) << "\n";
@@ -1023,6 +1240,19 @@ int main(int argc, const char * argv[]) {
                     }
                     audioStorageSize += newframe->nb_samples;
                 }
+                if (mode == OutputType::Vid32 && !separateStreams) {
+                    uint32_t size = audioStorageSize;
+                    outstream.write((const char*)&size, 4);
+                    outstream.put((char)Vid32Chunk::Type::Audio);
+                    outstream.write((const char*)audioStorage, size);
+                    nframe_vid32++;
+                    free(audioStorage);
+                    audioStorage = NULL;
+                    audioStorageSize = 0;
+                    std::string vdata = vid32stream.str();
+                    outstream.write(vdata.c_str(), vdata.size());
+                    vid32stream = std::stringstream();
+                }
                 av_frame_free(&newframe);
             }
             if (error != AVERROR_EOF && error != AVERROR(EAGAIN)) {
@@ -1034,7 +1264,7 @@ int main(int argc, const char * argv[]) {
         if (externalStop) break;
 #endif
     }
-    if (mode == OutputType::Vid32) {
+    if (mode == OutputType::Vid32 && separateStreams) {
         Vid32Chunk videoChunk, audioChunk;
         Vid32Header header;
         videoChunk.nframes = nframe;
@@ -1064,10 +1294,6 @@ int main(int argc, const char * argv[]) {
             outfile.write((char*)&videoChunk, 9);
             outfile.write((char*)buf + 2, size - 6);
             delete[] buf;
-        } else if (compression == VID32_FLAG_VIDEO_COMPRESSION_LZW) {
-            // TODO
-            std::cerr << "LZW not implemented yet\n";
-            goto cleanup;
         } else {
             videoChunk.size = videoStream.size();
             outfile.write((char*)&videoChunk, 9);
@@ -1091,6 +1317,16 @@ int main(int argc, const char * argv[]) {
             }
             vid32subs.clear();
         }
+    } else if (mode == OutputType::Vid32 && !separateStreams) {
+        std::string vdata = vid32stream.str();
+        outstream.write(vdata.c_str(), vdata.size());
+        vid32stream = std::stringstream();
+        Vid32Chunk chunk;
+        chunk.size = outstream.tellp() - 21;
+        chunk.nframes = nframe_vid32;
+        chunk.type = (uint8_t)Vid32Chunk::Type::Combined;
+        outstream.seekp(12, std::ios::beg);
+        outstream.write((const char*)&chunk, 9);
     } else if (mode == OutputType::BlitImage) {
         char timestr[26];
         time_t now = time(0);
@@ -1119,6 +1355,10 @@ cleanup:
     av_frame_free(&frame);
     av_packet_free(&packet);
     if (dfpwm_packet) av_packet_free(&dfpwm_packet);
+    if (sink_ctx) avfilter_free(sink_ctx);
+    if (src_ctx) avfilter_free(src_ctx);
+    if (asetnsamples_ctx) avfilter_free(asetnsamples_ctx);
+    if (filter_graph) avfilter_graph_free(&filter_graph);
     avcodec_free_context(&video_codec_ctx);
     if (audio_codec_ctx) avcodec_free_context(&audio_codec_ctx);
     if (dfpwm_codec_ctx) avcodec_free_context(&dfpwm_codec_ctx);

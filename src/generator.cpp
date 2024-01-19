@@ -513,6 +513,323 @@ std::string make32vid_cmp(const uchar * characters, const uchar * colors, const 
     return screen + col + pal;
 }
 
+static int log2i(unsigned int n) {
+    if (n == 0) return 0;
+    int i = 0;
+    while (n) {i++; n >>= 1;}
+    return i - 1;
+}
+
+class ANSEncoder {
+    uint32_t * bitstream;
+    size_t length = 0;
+    size_t size = 1024;
+    size_t bitCount = 0;
+    const uint32_t R, L;
+    uint32_t X = 0;
+    uint32_t * nb;
+    int32_t * start;
+    uint32_t * encodingTable;
+public:
+    ANSEncoder(const uint8_t _R, const std::vector<uint32_t>& Ls): R(_R), L(1 << _R) {
+        bitstream = (uint32_t*)malloc(size*4);
+        // prepare encoding
+        size_t Lsl = Ls.size();
+        nb = new uint32_t[Lsl];
+        start = new int32_t[Lsl];
+        uint32_t * next = new uint32_t[Lsl];
+        uint8_t * symbol = new uint8_t[L];
+        uint32_t sumLs = 0;
+        const uint32_t step = 0.625 * L + 3;
+        for (uint8_t s = 0; s < Lsl; s++) {
+            const uint32_t v = Ls[s];
+            const uint32_t ks = R - log2i(v);
+            nb[s] = (ks << (R+1)) - (v << ks);
+            start[s] = (int32_t)sumLs - (int32_t)v;
+            next[s] = v;
+            for (int i = 0; i < v; i++) {
+                symbol[X] = s;
+                X = (X + step) % L;
+            }
+            sumLs = sumLs + v;
+        }
+        // create encoding table
+        encodingTable = new uint32_t[2*L];
+        for (uint32_t x = L; x < 2*L; x++) {
+            const uint8_t s = symbol[x - L];
+            encodingTable[start[s] + next[s]] = x;
+            next[s]++;
+        }
+        X = L;
+        // free temps
+        delete[] next;
+        delete[] symbol;
+    }
+
+    ~ANSEncoder() {
+        free(bitstream);
+        delete[] nb;
+        delete[] start;
+        delete[] encodingTable;
+    }
+
+    static std::vector<uint32_t> makeLs(uint32_t * Ls, size_t LsS, uint8_t& R, uint8_t maxHeight = 15) {
+        // construct Huffman tree
+        tree_node nodes[32];
+        tree_node internal[31];
+        tree_node * internal_next = internal;
+        std::priority_queue<tree_node*, std::vector<tree_node*>, compare_node> queue;
+        for (int i = 0; i < LsS; i++) {
+            nodes[i].data = i;
+            nodes[i].weight = Ls[i];
+            nodes[i].left = nodes[i].right = NULL;
+            if (nodes[i].weight) queue.push(&nodes[i]);
+        }
+        if (queue.size() == 0) {
+            return {};
+        } else if (queue.size() == 1) {
+            return {queue.top()->data};
+        } else {
+            while (queue.size() > 1) {
+                tree_node * parent = internal_next++;
+                parent->left = queue.top();
+                queue.pop();
+                parent->right = queue.top();
+                queue.pop();
+                parent->weight = parent->left->weight + parent->right->weight;
+                queue.push(parent);
+            }
+            // make canonical codebook
+            tree_node * root = queue.top();
+            huffman_code codebook[32];
+            std::vector<huffman_code*> codes;
+            for (int i = 0; i < 32; i++) codebook[i].bits = 0;
+            loadCodes(root, codes, codebook, {0, 0, 0});
+            std::sort(codes.begin(), codes.end(), [](const huffman_code* a, const huffman_code* b)->bool {return a->bits == b->bits ? a->symbol < b->symbol : a->bits < b->bits;});
+            codes[0]->code = 0;
+            for (int i = 1; i < codes.size(); i++) {
+                if (codes[i]->bits > 15) throw std::logic_error("Too many bits!");
+                codes[i]->code = (codes[i-1]->code + 1) << (codes[i]->bits - codes[i-1]->bits);
+            }
+            R = 0;
+            for (int i = 0; i < LsS; i++) R = max(R, codebook[i].bits);
+            // make Huffman Ls
+            std::vector<uint32_t> LsH(LsS);
+            uint32_t huffSum = 0;
+            for (int i = 0; i < LsS; i++) {
+                const uint8_t v = codebook[i].bits;
+                LsH[i] = v ? 1 << (R - v) : 0;
+                huffSum += LsH[i];
+            }
+            R = log2i(huffSum);
+            return LsH;
+        }
+    }
+
+    void encode(const uint8_t * symbols, size_t _size) {
+        bool sSet = false;
+        uint8_t s = symbols[_size-1] & 0x1F;
+        for (int i = _size-2; i >= 0; i--) {
+            const uint8_t nbBits = ((X + nb[s]) >> (R + 1));
+            const uint8_t nexts = symbols[i] & 0x1F;
+            bitstream[length++] = ((uint32_t)nbBits << 24) | (X & ((1 << nbBits) - 1));
+            bitCount += nbBits;
+            if (length >= size) {
+                bitstream = (uint32_t*)realloc(bitstream, size * 4 + 4096);
+                size += 1024;
+            }
+            X = encodingTable[start[s] + (X >> nbBits)];
+            s = nexts;
+        }
+        const uint8_t nbBits = ((X + nb[s]) >> (R + 1));
+        bitstream[length++] = ((uint32_t)nbBits << 24) | (X & ((1 << nbBits) - 1));
+        bitCount += nbBits;
+        if (length >= size) {
+            bitstream = (uint32_t*)realloc(bitstream, size * 4 + 4096);
+            size += 1024;
+        }
+        X = encodingTable[start[s] + (X >> nbBits)];
+    }
+
+    std::string output() const {
+        uint32_t pending = 0;
+        uint8_t bits = 0;
+        uint8_t * data = new uint8_t[bitCount / 8 + 3];
+        size_t pos = 0;
+        pending = (pending << R) | (X - L);
+        bits += R;
+        while (bits >= 8) {
+            data[pos++] = (pending >> (bits - 8)) & 0xFF;
+            bits -= 8;
+        }
+        for (int i = length - 1; i >= 0; i--) {
+            const uint8_t nbBits = bitstream[i] >> 24;
+            pending = (pending << nbBits) | (bitstream[i] & 0xFFFFFF);
+            bits += nbBits;
+            while (bits >= 8) {
+                data[pos++] = (pending >> (bits - 8)) & 0xFF;
+                bits -= 8;
+            }
+        }
+        if (bits > 0) data[pos++] = (pending << (8 - bits)) & 0xFF;
+        std::string retval((const char*)data, pos);
+        delete[] data;
+        return retval;
+    }
+};
+
+static uint8_t ansdictcode(uint32_t n) {
+    if (n == 0) return 0;
+    else return log2i(n) + 1;
+}
+
+std::string make32vid_ans(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
+    std::string screen, col, pal;
+    uint32_t screen_freq[32], color_freq[24]; // color codes 16-23 = repeat last color 2^(n-15) times
+    uchar * fgcolors = new uchar[width*height];
+    uchar * bgcolors = new uchar[width*height];
+    uchar *fgnext = fgcolors, *bgnext = bgcolors;
+    uchar fc = colors[0] >> 4, fn = 0, bc = colors[0] & 0xF, bn = 0;
+    bool fset = false, bset = false;
+    // add weights for Huffman coding
+    for (int i = 0; i < width * height; i++) {
+        screen_freq[characters[i] & 0x1F]++;
+        // RLE encode colors
+        uchar fg = colors[i] & 0x0F, bg = colors[i] >> 4;
+        bool ok = true;
+        if (fn && (fg != fc || fn == 255)) {
+            if (!fset) {
+                *fgnext++ = fc;
+                color_freq[fc]++;
+            }
+            if (fg == fc) {
+                *fgnext++ = 23; color_freq[23]++;
+                ok = false;
+                fset = true;
+            } else {
+                fset = false;
+                if (--fn) {
+                    if (fn & 1) {*fgnext++ = fc; color_freq[fc]++;}
+                    if (fn & 2) {*fgnext++ = 16; color_freq[16]++;}
+                    if (fn & 4) {*fgnext++ = 17; color_freq[17]++;}
+                    if (fn & 8) {*fgnext++ = 18; color_freq[18]++;}
+                    if (fn & 16) {*fgnext++ = 19; color_freq[19]++;}
+                    if (fn & 32) {*fgnext++ = 20; color_freq[20]++;}
+                    if (fn & 64) {*fgnext++ = 21; color_freq[21]++;}
+                    if (fn & 128) {*fgnext++ = 22; color_freq[22]++;}
+                }
+            }
+            fn = 0;
+            fc = fg;
+        }
+        if (ok) fn++;
+        ok = true;
+        if (bn && (bg != bc || bn == 255)) {
+            if (!bset) {
+                *bgnext++ = bc;
+                color_freq[bc]++;
+            }
+            if (bg == bc) {
+                *bgnext++ = 23; color_freq[23]++;
+                ok = false;
+                bset = true;
+            } else {
+                bset = false;
+                if (--bn) {
+                    if (bn & 1) {*bgnext++ = bc; color_freq[bc]++;}
+                    if (bn & 2) {*bgnext++ = 16; color_freq[16]++;}
+                    if (bn & 4) {*bgnext++ = 17; color_freq[17]++;}
+                    if (bn & 8) {*bgnext++ = 18; color_freq[18]++;}
+                    if (bn & 16) {*bgnext++ = 19; color_freq[19]++;}
+                    if (bn & 32) {*bgnext++ = 20; color_freq[20]++;}
+                    if (bn & 64) {*bgnext++ = 21; color_freq[21]++;}
+                    if (bn & 128) {*bgnext++ = 22; color_freq[22]++;}
+                }
+            }
+            bn = 0;
+            bc = bg;
+        }
+        if (ok) bn++;
+    }
+    if (fn) {
+        if (!fset) {
+            *fgnext++ = fc;
+            color_freq[fc]++;
+        }
+        if (--fn) {
+            if (fn & 1) {*fgnext++ = fc; color_freq[fc]++;}
+            if (fn & 2) {*fgnext++ = 16; color_freq[16]++;}
+            if (fn & 4) {*fgnext++ = 17; color_freq[17]++;}
+            if (fn & 8) {*fgnext++ = 18; color_freq[18]++;}
+            if (fn & 16) {*fgnext++ = 19; color_freq[19]++;}
+            if (fn & 32) {*fgnext++ = 20; color_freq[20]++;}
+            if (fn & 64) {*fgnext++ = 21; color_freq[21]++;}
+            if (fn & 128) {*fgnext++ = 22; color_freq[22]++;}
+        }
+    }
+    if (bn) {
+        if (!bset) {
+            *bgnext++ = bc;
+            color_freq[bc]++;
+        }
+        if (--bn) {
+            if (bn & 1) {*bgnext++ = bc; color_freq[bc]++;}
+            if (bn & 2) {*bgnext++ = 16; color_freq[16]++;}
+            if (bn & 4) {*bgnext++ = 17; color_freq[17]++;}
+            if (bn & 8) {*bgnext++ = 18; color_freq[18]++;}
+            if (bn & 16) {*bgnext++ = 19; color_freq[19]++;}
+            if (bn & 32) {*bgnext++ = 20; color_freq[20]++;}
+            if (bn & 64) {*bgnext++ = 21; color_freq[21]++;}
+            if (bn & 128) {*bgnext++ = 22; color_freq[22]++;}
+        }
+    }
+    for (int i = 0; i < 16; i++) {
+        if (i < palette.size()) {
+            pal += palette[i][2];
+            pal += palette[i][1];
+            pal += palette[i][0];
+        } else pal += std::string((size_t)3, (char)0);
+    }
+
+    // compress screen data
+    // create Ls
+    uint8_t screenR = 0;
+    std::vector<uint32_t> screenLs = ANSEncoder::makeLs(screen_freq, 32, screenR);
+    if (screenLs.size() == 1) {
+        // encode a full-screen pattern of the same thing
+        screen = std::string(16, '\0') + std::string(1, screenLs[0]);
+    } else {
+        // compress data
+        screen += screenR;
+        for (int i = 0; i < 32; i += 2) screen += ansdictcode(screenLs[i]) << 4 | ansdictcode(screenLs[i+1]);
+        ANSEncoder encoder(screenR, screenLs);
+        encoder.encode(characters, width * height);
+        screen += encoder.output();
+    }
+    
+    // compress color data
+    // create Ls
+    uint8_t colorsR = 0;
+    std::vector<uint32_t> colorsLs = ANSEncoder::makeLs(color_freq, 24, colorsR);
+    if (colorsLs.size() == 1) {
+        // encode a full-screen pattern of the same thing
+        col = std::string(12, '\0') + std::string(1, colorsLs[0]);
+    } else {
+        // compress data
+        col += colorsR;
+        for (int i = 0; i < 24; i += 2) col += ansdictcode(colorsLs[i]) << 4 | ansdictcode(colorsLs[i+1]);
+        ANSEncoder encoder(colorsR, colorsLs);
+        encoder.encode(fgcolors, fgnext - fgcolors);
+        encoder.encode(bgcolors, bgnext - bgcolors);
+        col += encoder.output();
+    }
+
+    delete[] fgcolors;
+    delete[] bgcolors;
+    //std::cout << screen.size() << "/" << col.size() << "\n";
+    return screen + col + pal;
+}
+
 std::string makeLuaFile(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
-    return "-- Generated with sanjuuni\n-- https://sanjuuni.madefor.cc\nlocal image, palette = " + makeTable(characters, colors, palette, width, height) + "\n\nterm.clear()\nfor i = 0, #palette do term.setPaletteColor(2^i, table.unpack(palette[i])) end\nfor y, r in ipairs(image) do\n    term.setCursorPos(1, y)\n    term.blit(table.unpack(r))\nend\nread()\nfor i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.setCursorPos(1, 1)\nterm.clear()\n";
+    return "-- Generated with sanjuuni\n-- https://sanjuuni.madefor.cc\ndo local image, palette = " + makeTable(characters, colors, palette, width, height) + "\n\nterm.clear()\nfor i = 0, #palette do term.setPaletteColor(2^i, table.unpack(palette[i])) end\nfor y, r in ipairs(image) do\n    term.setCursorPos(1, y)\n    term.blit(table.unpack(r))\nend\nread()\nfor i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.setCursorPos(1, 1)\nterm.clear() end\n";
 }
