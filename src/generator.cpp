@@ -292,7 +292,7 @@ struct compare_node {bool operator()(tree_node *a, tree_node *b) {
 
 std::string make32vid_cmp(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
     std::string screen, col, pal;
-    tree_node screen_nodes[32], color_nodes[24]; // color codes 16-23 = repeat last color 2^(n-15) times
+    tree_node screen_nodes[32] = {0}, color_nodes[24] = {0}; // color codes 16-23 = repeat last color 2^(n-15) times
     tree_node internal[31];
     tree_node * internal_next = internal;
     uchar * fgcolors = new uchar[width*height];
@@ -539,26 +539,30 @@ public:
         start = new int32_t[Lsl];
         uint32_t * next = new uint32_t[Lsl];
         uint8_t * symbol = new uint8_t[L];
+        memset(symbol, 0xFF, L);
         uint32_t sumLs = 0;
-        const uint32_t step = 0.625 * L + 3;
+        const uint32_t step = ((L * 5) >> 3) + 3;
         for (uint8_t s = 0; s < Lsl; s++) {
             const uint32_t v = Ls[s];
-            const uint32_t ks = R - log2i(v);
-            nb[s] = (ks << (R+1)) - (v << ks);
-            start[s] = (int32_t)sumLs - (int32_t)v;
-            next[s] = v;
-            for (int i = 0; i < v; i++) {
-                symbol[X] = s;
-                X = (X + step) % L;
+            //std::cout << (int)s << " " << v << "\n";
+            if (v) {
+                const uint32_t ks = R - log2i(v);
+                nb[s] = (ks << (R+1)) - (v << ks);
+                start[s] = (int32_t)sumLs - (int32_t)v;
+                next[s] = v;
+                for (int i = 0; i < v; i++) {
+                    while (symbol[X] != 0xFF) X = (X + 1) % L;
+                    symbol[X] = s;
+                    X = (X + step) % L;
+                }
+                sumLs = sumLs + v;
             }
-            sumLs = sumLs + v;
         }
         // create encoding table
         encodingTable = new uint32_t[2*L];
         for (uint32_t x = L; x < 2*L; x++) {
             const uint8_t s = symbol[x - L];
-            encodingTable[start[s] + next[s]] = x;
-            next[s]++;
+            encodingTable[start[s] + next[s]++] = x;
         }
         X = L;
         // free temps
@@ -631,6 +635,7 @@ public:
         uint8_t s = symbols[_size-1] & 0x1F;
         for (int i = _size-2; i >= 0; i--) {
             const uint8_t nbBits = ((X + nb[s]) >> (R + 1));
+            //std::cout << (int)s << " " << (int)nbBits << "\n";
             const uint8_t nexts = symbols[i] & 0x1F;
             bitstream[length++] = ((uint32_t)nbBits << 24) | (X & ((1 << nbBits) - 1));
             bitCount += nbBits;
@@ -685,7 +690,7 @@ static uint8_t ansdictcode(uint32_t n) {
 
 std::string make32vid_ans(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
     std::string screen, col, pal;
-    uint32_t screen_freq[32], color_freq[24]; // color codes 16-23 = repeat last color 2^(n-15) times
+    uint32_t screen_freq[32] = {0}, color_freq[24] = {0}; // color codes 16-23 = repeat last color 2^(n-15) times
     uchar * fgcolors = new uchar[width*height];
     uchar * bgcolors = new uchar[width*height];
     uchar *fgnext = fgcolors, *bgnext = bgcolors;
@@ -797,7 +802,7 @@ std::string make32vid_ans(const uchar * characters, const uchar * colors, const 
     std::vector<uint32_t> screenLs = ANSEncoder::makeLs(screen_freq, 32, screenR);
     if (screenLs.size() == 1) {
         // encode a full-screen pattern of the same thing
-        screen = std::string(16, '\0') + std::string(1, screenLs[0]);
+        screen = std::string(17, '\0') + std::string(1, screenLs[0]);
     } else {
         // compress data
         screen += screenR;
@@ -813,7 +818,7 @@ std::string make32vid_ans(const uchar * characters, const uchar * colors, const 
     std::vector<uint32_t> colorsLs = ANSEncoder::makeLs(color_freq, 24, colorsR);
     if (colorsLs.size() == 1) {
         // encode a full-screen pattern of the same thing
-        col = std::string(12, '\0') + std::string(1, colorsLs[0]);
+        col = std::string(13, '\0') + std::string(1, colorsLs[0]);
     } else {
         // compress data
         col += colorsR;

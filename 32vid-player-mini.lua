@@ -36,6 +36,11 @@ if bit32_band(flags, 3) == 1 then
         local R = file.read()
         local L = 2^R
         local Ls = readDict(c and 24 or 32)
+        if R == 0 then
+            decodingTable = file.read()
+            X = nil
+            return
+        end
         local a = 0
         for i = 0, #Ls do Ls[i] = Ls[i] == 0 and 0 or 2^(Ls[i]-1) a = a + Ls[i] end
         assert(a == L, a)
@@ -43,7 +48,10 @@ if bit32_band(flags, 3) == 1 then
         local x, step, next, symbol = 0, 0.625 * L + 3, {}, {}
         for i = 0, #Ls do
             next[i] = Ls[i]
-            for _ = 1, Ls[i] do x, symbol[x] = (x + step) % L, i end
+            for _ = 1, Ls[i] do
+                while symbol[x] do x = (x + 1) % L end
+                x, symbol[x] = (x + step) % L, i
+            end
         end
         for x = 0, L - 1 do
             local s = symbol[x]
@@ -63,6 +71,10 @@ if bit32_band(flags, 3) == 1 then
     end
     function read(nsym)
         local retval = {}
+        if X == nil then
+            for i = 1, nsym do retval[i] = decodingTable end
+            return retval
+        end
         local i = 1
         local last = 0
         while i <= nsym do
@@ -105,6 +117,7 @@ for _ = 1, nframes do
         local fg = read(width * height)
         local dctime = os.epoch "utc" - dcstart
         while os.epoch "utc" < start + vframe * 1000 / fps do end
+        local texta, fga, bga = {}, {}, {}
         for y = 0, height - 1 do
             local text, fgs, bgs = "", "", ""
             for x = 1, width do
@@ -112,10 +125,13 @@ for _ = 1, nframes do
                 fgs = fgs .. blitColors[fg[y*width+x]]
                 bgs = bgs .. blitColors[bg[y*width+x]]
             end
-            term.setCursorPos(1, y+1)
-            term.blit(text, fgs, bgs)
+            texta[y+1], fga[y+1], bga[y+1] = text, fgs, bgs
         end
         for i = 0, 15 do term.setPaletteColor(2^i, file.read() / 255, file.read() / 255, file.read() / 255) end
+        for y = 1, height do
+            term.setCursorPos(1, y)
+            term.blit(texta[y], fga[y], bga[y])
+        end
         local delete = {}
         for i, v in ipairs(subs) do
             if vframe <= v.frame + v.length then

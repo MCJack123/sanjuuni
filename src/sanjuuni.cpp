@@ -1061,7 +1061,7 @@ int main(int argc, const char * argv[]) {
                     if (mode == OutputType::Vid32 && !separateStreams) {
                         Vid32Chunk combinedChunk;
                         Vid32Header header;
-                        combinedChunk.nframes = 0;
+                        combinedChunk.nframes = totalFrames;
                         combinedChunk.type = (uint8_t)Vid32Chunk::Type::Combined;
                         memcpy(header.magic, "32VD", 4);
                         header.width = width / 2;
