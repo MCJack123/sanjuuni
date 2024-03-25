@@ -4,10 +4,10 @@ m4_include([m4/find_cxx.m4])
 m4_include([m4/find_cxx11.m4])
 
 AC_LANG([C++])
-CXXFLAGS="$CXXFLAGS -std=c++11"
+CXXFLAGS="$CXXFLAGS -std=c++17"
 AC_PROG_CC
 AC_PROG_CXX
-AX_CHECK_COMPILE_FLAG([-std=c++11], [], [AC_MSG_ERROR([C++ compiler does not support -std=c++11.])])
+AX_CHECK_COMPILE_FLAG([-std=c++17], [], [AC_MSG_ERROR([C++ compiler does not support -std=c++17.])])
 
 AC_CHECK_HEADERS([libavformat/avformat.h], [], [AC_MSG_ERROR([Could not find libavformat headers.])])
 AC_CHECK_HEADERS([libavcodec/avcodec.h], [], [AC_MSG_ERROR([Could not find libavcodec headers.])])
