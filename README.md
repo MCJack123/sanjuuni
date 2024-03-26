@@ -44,7 +44,7 @@ Nix support is maintained by [Tomodachi94](https://github.com/tomodachi94). For 
 
 ## Building
 Requirements:
-* C++11 or later compiler
+* C++17 or later compiler
 * FFmpeg libraries
 * Poco (Foundation and Util required; Net/NetSSL optional)
 * zlib (usually required by Poco)
