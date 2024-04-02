@@ -492,10 +492,10 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("subtitle", "S", "ASS-formatted subtitle file to add to the video", false, "file", true));
     options.addOption(Option("format", "f", "Force a format to use for the input file", false, "format", true));
     options.addOption(Option("output", "o", "Output file path", false, "path", true));
-    options.addOption(Option("lua", "l", "Output a Lua script file (default for images; only does one frame)"));
+    options.addOption(Option("lua", "l", "Output a Lua script file (default)"));
     options.addOption(Option("nfp", "n", "Output an NFP format image for use in paint (changes proportions!)"));
     options.addOption(Option("raw", "r", "Output a rawmode-based image/video file"));
-    options.addOption(Option("blit-image", "b", "Output a blit image (BIMG) format image/animation file (default for videos)"));
+    options.addOption(Option("blit-image", "b", "Output a blit image (BIMG) format image/animation file"));
     options.addOption(Option("32vid", "3", "Output a 32vid format binary video file with compression + audio"));
     options.addOption(Option("http", "s", "Serve an HTTP server that has each frame split up + a player program", false, "port", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("websocket", "w", "Serve a WebSocket that sends the image/video with audio", false, "port", true).validator(new IntValidator(1, 65535)));
@@ -686,7 +686,7 @@ int main(int argc, const char * argv[]) {
         avformat_close_input(&format_ctx);
         return error;
     }
-    if (mode == OutputType::Default) mode = format_ctx->streams[video_stream]->nb_frames > 0 && !monitorWidth ? OutputType::BlitImage : OutputType::Lua;
+    if (mode == OutputType::Default) mode = OutputType::Lua;
     if (mode == OutputType::Vid32 && !separateStreams) {
         if (!(filter_graph = avfilter_graph_alloc())) {
             std::cerr << "Could not allocate filter graph\n";
@@ -922,6 +922,7 @@ int main(int argc, const char * argv[]) {
     auto start = system_clock::now();
     auto lastUpdate = system_clock::now() - seconds(1);
     bool first = true;
+    int64_t totalDuration = 0;
 #ifndef NO_NET
     if (mode == OutputType::HTTP) {
         srv = new HTTPServer(new HTTPListener::Factory(&fps), port);
@@ -1019,12 +1020,12 @@ int main(int argc, const char * argv[]) {
     while (av_read_frame(format_ctx, packet) >= 0) {
         if (packet->stream_index == video_stream) {
             avcodec_send_packet(video_codec_ctx, packet);
-            fps = (double)video_codec_ctx->framerate.num / (double)video_codec_ctx->framerate.den;
-            if (fps < 1) {
+            fps = av_q2d(video_codec_ctx->framerate);
+            /*if (fps < 1 && format_ctx->streams[video_stream]->nb_frames > 1) {
                 std::cerr << "Variable framerate files are not supported.\n";
                 av_packet_unref(packet);
                 goto cleanup;
-            }
+            }*/
             if (first) {
                 if (!subtitle.empty()) subtitles = parseASSSubtitles(subtitle, fps);
                 if (mode == OutputType::Raw) outstream << "32Vid 1.1\n" << fps << "\n";
@@ -1043,6 +1044,7 @@ int main(int argc, const char * argv[]) {
 #endif
                     lastUpdate = now;
                 } else nframe++;
+                totalDuration += frame->duration;
                 if (resize_ctx == NULL) {
                     if (width != -1 || height != -1) {
                         width = width == -1 ? height * ((double)frame->width / (double)frame->height) : width;
@@ -1107,7 +1109,7 @@ int main(int argc, const char * argv[]) {
                     convertImage(rs, &characters, &colors, palette, w, h, nframe);
                     switch (mode) {
                     case OutputType::Lua: {
-                        outstream << makeLuaFile(characters, colors, palette, w / 2, h / 3);
+                        outstream << makeLuaFile(characters, colors, palette, w / 2, h / 3) << "sleep(" << (frame->duration * av_q2d(format_ctx->streams[video_stream]->time_base)) << ")\n";
                         outstream.flush();
                         break;
                     } case OutputType::NFP: {
@@ -1264,6 +1266,15 @@ int main(int argc, const char * argv[]) {
         if (externalStop) break;
 #endif
     }
+    if (fps < 1) {
+        fps = nframe / (totalDuration * av_q2d(format_ctx->streams[video_stream]->time_base));
+        if (mode == OutputType::Vid32 && !separateStreams) {
+            auto pos = outstream.tellp();
+            outstream.seekp(8, std::ios::beg);
+            outstream.put(floor(fps + 0.5));
+            outstream.seekp(pos, std::ios::beg);
+        }
+    }
     if (mode == OutputType::Vid32 && separateStreams) {
         Vid32Chunk videoChunk, audioChunk;
         Vid32Header header;
@@ -1338,6 +1349,9 @@ int main(int argc, const char * argv[]) {
         }
         if (binary) outfile << "creator='sanjuuni',version='1.0.0',secondsPerFrame=" << (1.0 / fps) << ",animation=" << (nframe > 1 ? "true" : "false") << ",date='" << timestr << "',title='" << input << "'}";
         else outfile << "creator = 'sanjuuni',\nversion = '1.0.0',\nsecondsPerFrame = " << (1.0 / fps) << ",\nanimation = " << (nframe > 1 ? "true" : "false") << ",\ndate = '" << timestr << "',\ntitle = '" << input << "'\n}\n";
+    } else if (mode == OutputType::Lua) {
+        if (nframe == 1) outfile << "read()\n";
+        outfile << "for i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.setCursorPos(1, 1)\nterm.clear()\n";
     }
 cleanup:
     auto t = system_clock::now() - start;

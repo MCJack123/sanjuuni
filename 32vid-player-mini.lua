@@ -90,7 +90,7 @@ if bit32_band(flags, 3) == 1 then
         return retval
     end
 else
-
+    error("Unimplemented!")
 end
 
 local blitColors = {[0] = "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"}
@@ -165,3 +165,9 @@ for _ = 1, nframes do
         subs[#subs+1] = sub
     else file.close() error("Unknown frame type " .. ftype) end
 end
+
+for i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end
+term.setBackgroundColor(colors.black)
+term.setTextColor(colors.white)
+term.setCursorPos(1, 1)
+term.clear()

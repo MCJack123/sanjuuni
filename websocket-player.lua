@@ -1,9 +1,9 @@
 local ws, err = http.websocket(...)
 if not ws then error("Could not connect to WebSocket server: " .. err) end
 ws.send("n")
-local nFrames = tonumber(ws.receive(), nil)
+local nFrames = tonumber(ws.receive(), 10)
 ws.send("f")
-local fps = tonumber(ws.receive(), nil)
+local fps = tonumber(ws.receive(), 10)
 local speaker = peripheral.find "speaker"
 term.clear()
 local lock = false
@@ -13,15 +13,17 @@ parallel.waitForAll(function()
         while lock do os.pullEvent() end
         lock = true
         ws.send("v" .. f)
-        local frame, ok = ws.receive(1)
-        while #frame % 65535 == 0 do frame = frame .. ws.receive(1) end
+        local frame, ok = ws.receive()
+        while #frame % 65535 == 0 do frame = frame .. ws.receive() end
         lock = false
-        if not ok then break end
-        local image, palette = assert(load(frame, "=frame", "t", {}))()
-        for i = 0, #palette do term.setPaletteColor(2^i, table.unpack(palette[i])) end
-        for y, r in ipairs(image) do
-            term.setCursorPos(1, y)
-            term.blit(table.unpack(r))
+        --if not ok then break end
+        if load(frame) then
+            local image, palette = assert(load(frame, "=frame", "t", {}))()
+            for i = 0, #palette do term.setPaletteColor(2^i, table.unpack(palette[i])) end
+            for y, r in ipairs(image) do
+                term.setCursorPos(1, y)
+                term.blit(table.unpack(r))
+            end
         end
         while os.epoch "utc" < start + (f + 1) / fps * 1000 do sleep(1 / fps) end
     end

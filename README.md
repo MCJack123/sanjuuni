@@ -105,7 +105,7 @@ Custom palettes are specified as a list of 16 comma-separated 6-digit hex codes,
 * `websocket-player.lua` plays a stream from a sanjuuni WebSocket server. Simply give it the WebSocket URL and it will play the stream, with audio if a speaker is attached.
 
 ## Formats
-* The Lua file output creates a simple script that displays the image and waits for the return key to be pressed. The data is stored as a plain blit table, so it can be copied to another file as desired with the display code.
+* The Lua file output creates a simple script that displays the image/animation, and if there's only one frame, waits for the return key to be pressed. The data is stored as plain blit table(s), so it can be copied to another file as desired with the display code.
 * The raw file output creates a file based on [CraftOS-PC Raw Mode](https://www.craftos-pc.cc/docs/rawmode). Each frame packet is stored on one line, and the first two lines contain a version header and the FPS. (If the FPS is 0, this is a plain image.)
 * The blit image file output creates a file based on [the BIMG specification](https://github.com/SkyTheCodeMaster/bimg). This is similar to Lua output, but stored in a serialized table for reading by other files. It also supports animations, but no audio.
 * The 32vid file output creates a file that uses the 32vid format described below, which is a binary file that stores compressed and optimized versions of the video and audio data in multiple streams.
@@ -153,6 +153,14 @@ The 32vid format consists of a number of streams, which can hold video, audio, o
 * 8: Primary subtitles
 * 9-11: Alternate subtitles if desired
 * 12: Combo data stream
+* 13: Combo stream indexes
+* 64-127: Multi-monitor video
+  * Bitfield describes monitor placement:
+    * 2 bits (`01`) for chunk type
+    * 3 bits for monitor X (0-7)
+    * 3 bits for monitor Y (0-7)
+
+As of sanjuuni 0.5, the old-style format with separate streams is deprecated. It remains available for legacy applications, but new features will only be supported in the combo stream format.
 
 #### Video data
 Video data is stored as a list of frames, with each frame consisting of packed pixel data, then colors. Pixel data is stored in a bitstream as 5-bit codes. The low 5 bits correspond to the low 5 bits in the drawing characters, and the character can be derived by adding 128 to the value.
@@ -186,7 +194,12 @@ This is a variant of the normal custom format, but uses asymmetrical numeral sys
 Subtitle streams are arranged as sequences of subtitle events. Events MUST be ordered by start time; decoders are not required to respect events that are out of order.
 
 #### Combined audio/video streams
-This stream format is used to encode audio and video together, which allows real-time decoding of video. It's split into frames of video, audio, and subtitles, which are each prefixed with a 4 byte size, and a 1 byte type code using the stream type codes. A frame only contains a single event of its type: video is one single frame, subtitles are one single event, and audio is a single chunk (which can be any length, ideally around 0.5s). The length field of the stream is used to store the number of frames in the stream. If the file contains a combined stream, it SHOULD NOT contain any other type of stream.
+This stream format is used to encode audio and video together, which allows real-time decoding of video. It's split into frames of video, audio, and subtitles, which are each prefixed with a 4 byte size, and a 1 byte type code using the stream type codes. A frame only contains a single event of its type: video is one single frame, subtitles are one single event, and audio is a single chunk (which can be any length, ideally around 0.5s). The length field of the stream is used to store the number of frames in the stream. If the file contains a combined stream, it SHOULD NOT contain any other type of stream, except an index if available.
+
+#### Combined stream index table
+This chunk type stores an index table for the audio/video stream, which can speed up seeking in the file. It contains a single byte with the number of video frames per entry, and afterwards is split up into 32-bit words, where each word is an offset into the file for the start of that video frame. For example, if the first byte is 60, the first word will point to video frame 0, the next will point to frame 60, then frame 120, and so on. Note that this counts video frames specifically - the index will never point to an audio or subtitle frame.
+
+Index tables MAY be stored at either the beginning or end of the file. If your application is looking for an index table and it is not the first stream, seek past the combo stream and check whether it's after the stream. sanjuuni stores the index at the end for efficiency.
 
 ## Library usage
 It's possible to use much of the core of sanjuuni as a library for other programs. To do this, simply include all files but `sanjuuni.cpp` in your program, and include `sanjuuni.hpp` in the source you want to use sanjuuni in. Then create a global `WorkQueue work` variable in your source, which is used to delegate tasks to threads. Then use any of the functions in `sanjuuni.hpp` as you need. Basic documentation is available in the header.

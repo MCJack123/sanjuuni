@@ -19,6 +19,7 @@
  */
 
 #include "sanjuuni.hpp"
+#include <cstring>
 #include <algorithm>
 #include <sstream>
 #include <stack>
@@ -292,7 +293,7 @@ struct compare_node {bool operator()(tree_node *a, tree_node *b) {
 
 std::string make32vid_cmp(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
     std::string screen, col, pal;
-    tree_node screen_nodes[32] = {0}, color_nodes[24] = {0}; // color codes 16-23 = repeat last color 2^(n-15) times
+    tree_node screen_nodes[32] = {}, color_nodes[24] = {}; // color codes 16-23 = repeat last color 2^(n-15) times
     tree_node internal[31];
     tree_node * internal_next = internal;
     uchar * fgcolors = new uchar[width*height];
@@ -836,5 +837,5 @@ std::string make32vid_ans(const uchar * characters, const uchar * colors, const 
 }
 
 std::string makeLuaFile(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
-    return "-- Generated with sanjuuni\n-- https://sanjuuni.madefor.cc\ndo local image, palette = " + makeTable(characters, colors, palette, width, height) + "\n\nterm.clear()\nfor i = 0, #palette do term.setPaletteColor(2^i, table.unpack(palette[i])) end\nfor y, r in ipairs(image) do\n    term.setCursorPos(1, y)\n    term.blit(table.unpack(r))\nend\nread()\nfor i = 0, 15 do term.setPaletteColor(2^i, term.nativePaletteColor(2^i)) end\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.setCursorPos(1, 1)\nterm.clear() end\n";
+    return "-- Generated with sanjuuni\n-- https://sanjuuni.madefor.cc\ndo\nlocal image, palette = " + makeTable(characters, colors, palette, width, height) + "\n\nterm.clear()\nfor i = 0, #palette do term.setPaletteColor(2^i, table.unpack(palette[i])) end\nfor y, r in ipairs(image) do\n    term.setCursorPos(1, y)\n    term.blit(table.unpack(r))\nend\nend\n";
 }
