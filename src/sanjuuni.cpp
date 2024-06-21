@@ -188,11 +188,13 @@ public:
             std::string file = "local a='" + request.getHost() + playLua;
             response.setStatusAndReason(HTTPResponse::HTTP_OK);
             response.setContentType("text/x-lua");
+            response.setContentLength(file.size());
             response.send().write(file.c_str(), file.size());
         } else if (path == "/info") {
             std::string file = "{\n    \"length\": " + std::to_string(frameStorage.size()) + ",\n    \"fps\": " + std::to_string(*fps) + "\n}";
             response.setStatusAndReason(HTTPResponse::HTTP_OK);
             response.setContentType("application/json");
+            response.setContentLength(file.size());
             response.send().write(file.c_str(), file.size());
         } else if (path.substr(0, 7) == "/video/") {
             int frame;
@@ -212,6 +214,7 @@ public:
             }
             response.setStatusAndReason(HTTPResponse::HTTP_OK);
             response.setContentType("text/x-lua");
+            response.setContentLength(frameStorage[frame].size());
             response.send().write(frameStorage[frame].c_str(), frameStorage[frame].size());
         } else if (path.substr(0, 7) == "/audio/") {
             int frame;
@@ -233,7 +236,9 @@ public:
             }
             response.setStatusAndReason(HTTPResponse::HTTP_OK);
             response.setContentType("application/octet-stream");
-            response.send().write((char*)(audioStorage + frame * size), frame == audioStorageSize / size ? audioStorageSize % size : size);
+            size_t sz = frame == audioStorageSize / size ? audioStorageSize % size : size;
+            response.setContentLength(sz);
+            response.send().write((char*)(audioStorage + frame * size), sz);
         } else {
             response.setStatusAndReason(HTTPResponse::HTTP_NOT_FOUND);
             response.setContentType("text/plain");
