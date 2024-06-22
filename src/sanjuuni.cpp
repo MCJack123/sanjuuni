@@ -1338,7 +1338,7 @@ int main(int argc, const char * argv[]) {
         outstream.write(vdata.c_str(), vdata.size());
         vid32stream = std::stringstream();
         Vid32Chunk chunk;
-        chunk.size = outstream.tellp() - 21;
+        chunk.size = (size_t)outstream.tellp() - 21;
         chunk.nframes = nframe_vid32;
         chunk.type = (uint8_t)Vid32Chunk::Type::Combined;
         outstream.seekp(12, std::ios::beg);
