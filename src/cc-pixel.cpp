@@ -36,6 +36,7 @@
 #define get_local_size(n) 64
 #define get_global_size(n) 0
 #define barrier(n) ((void)0)
+#define atomic_inc(n) (*n++)
 #define CLK_LOCAL_MEM_FENCE 0
 #define CLK_GLOBAL_MEM_FENCE 0
 
@@ -415,14 +416,34 @@ __kernel void thresholdKernel(__global const uchar * image, __global uchar * out
     output[get_global_id(0)*3] = closest.x; output[get_global_id(0)*3+1] = closest.y; output[get_global_id(0)*3+2] = closest.z;
 }
 
-__kernel void floydSteinbergDither(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size, __global float * error, __global uint * progress, ulong width, ulong height) {
+// Adapted from https://community.arm.com/arm-community-blogs/b/graphics-gaming-and-vr-blog/posts/when-parallelism-gets-tricky-accelerating-floyd-steinberg-on-the-mali-gpu
+__kernel void floydSteinbergDither(
+    __global const uchar * image,
+    __global uchar * output,
+    __constant uchar * palette,
+    uchar palette_size,
+    __global float * error,
+    __global uint * workgroup_rider,
+    __global volatile uint *workgroup_progress,
+    __local volatile uint *progress,
+    ulong width, ulong height
+) {
+    __local volatile uint workgroup_number;
     __private uint x;
     __private float3 pix, closest, err;
-    __private uint id = get_global_id(0);
-    __private ulong yoff = id*width;
-    for (x = 0; x < width || progress[(get_group_id(0)+1)*get_local_size(0)-1] < width;) {
-        if (x >= width) progress[id] = width + 2;
-        else if (id == 0 || progress[id-1] >= x + 2) {
+    __private uint id;
+    __private ulong yoff;
+
+    if (get_local_id(0) == 0) {
+        workgroup_number = atomic_inc(workgroup_rider);
+        for (int i = 0; i < get_local_size(0); i++) progress[i] = 0;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    id = workgroup_number * get_local_size(0) + get_local_id(0);
+    yoff = id*width;
+    for (x = 0; x < width;) {
+        if (get_local_id(0) == 0 ? workgroup_number == 0 || workgroup_progress[workgroup_number-1] >= x + 2 : progress[get_local_id(0)-1] >= x + 2) {
             if (id < height) {
                 pix.x = image[(yoff+x)*3]; pix.y = image[(yoff+x)*3+1]; pix.z = image[(yoff+x)*3+2];
                 pix += vload3(yoff + x, error);
@@ -436,10 +457,13 @@ __kernel void floydSteinbergDither(__global const uchar * image, __global uchar 
                 if (x > 0) vstore3(vload3(yoff + width + x - 1, error) + (err * 0.125f), yoff + width + x - 1, error);
                 vstore3(vload3(yoff + width + x, error) + (err * 0.1875f), yoff + width + x, error);
             }
-            x++; progress[id]++;
+            if (get_local_id(0) == get_local_size(0) - 1) workgroup_progress[workgroup_number] = x;
+            else progress[get_local_id(0)] = x;
+            x++;
         }
     }
-    progress[id] = width + 2;
+    if (get_local_id(0) == get_local_size(0) - 1) workgroup_progress[workgroup_number] = width + 2;
+    else progress[get_local_id(0)] = width + 2;
 }
 
 static __constant int thresholdMap[8][8] = {

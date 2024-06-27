@@ -13,7 +13,7 @@ end
 
 if file.read(4) ~= "32VD" then file.close() error("Not a 32Vid file") end
 local width, height, fps, nstreams, flags = ("<HHBBH"):unpack(file.read(8))
-print(width, height, fps, nstreams, flags)
+--print(width, height, fps, nstreams, flags)
 if nstreams ~= 1 then file.close() error("Separate stream files not supported by this tool") end
 if bit32_band(flags, 1) == 0 then file.close() error("DEFLATE or no compression not supported by this tool") end
 local _, nframes, ctype = ("<IIB"):unpack(file.read(9))
@@ -138,7 +138,7 @@ local subs = {}
 term.clear()
 for _ = 1, nframes do
     local size, ftype = ("<IB"):unpack(file.read(5))
-    print(size, ftype, file.seek())
+    --print(size, ftype, file.seek())
     if ftype == 0 then
         if os.epoch "utc" - lastyield > 3000 then sleep(0) lastyield = os.epoch "utc" end
         local dcstart = os.epoch "utc"
@@ -179,9 +179,9 @@ for _ = 1, nframes do
             else delete[#delete+1] = i end
         end
         for i, v in ipairs(delete) do table.remove(subs, v - i + 1) end
-        term.setCursorPos(1, height + 1)
-        term.clearLine()
-        print("Frame decode time:", dctime, "ms")
+        --term.setCursorPos(1, height + 1)
+        --term.clearLine()
+        --print("Frame decode time:", dctime, "ms")
         vframe = vframe + 1
     elseif ftype == 1 then
         local audio = file.read(size)
@@ -203,7 +203,7 @@ for _ = 1, nframes do
     elseif ftype >= 0x40 and ftype < 0x80 then
         if ftype == 64 then vframe = vframe + 1 end
         local mx, my = bit32_band(bit32_rshift(ftype, 3), 7) + 1, bit32_band(ftype, 7) + 1
-        print("(" .. mx .. ", " .. my .. ")")
+        --print("(" .. mx .. ", " .. my .. ")")
         local term = monitors[my][mx]
         if os.epoch "utc" - lastyield > 3000 then sleep(0) lastyield = os.epoch "utc" end
         local width, height = ("<HH"):unpack(file.read(4))
@@ -245,9 +245,9 @@ for _ = 1, nframes do
             else delete[#delete+1] = i end
         end
         for i, v in ipairs(delete) do table.remove(subs, v - i + 1) end]]
-        term.setCursorPos(1, height + 1)
-        term.clearLine()
-        print("Frame decode time:", dctime, "ms")
+        --term.setCursorPos(1, height + 1)
+        --term.clearLine()
+        --print("Frame decode time:", dctime, "ms")
     else file.close() error("Unknown frame type " .. ftype) end
 end
 
