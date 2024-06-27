@@ -457,10 +457,10 @@ void renderSubtitles(const std::unordered_multimap<int, ASSSubtitleEvent>& subti
 static std::unordered_multimap<int, ASSSubtitleEvent> subtitles;
 static OpenCL::Device * device = NULL;
 static std::string input, output, subtitle, format;
-static bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false, disableOpenCL = false, separateStreams = false;
+static bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false, disableOpenCL = false, separateStreams = false, trimBorders = false;
 static OutputType mode = OutputType::Default;
 static int compression = VID32_FLAG_VIDEO_COMPRESSION_ANS;
-static int port = 80, width = -1, height = -1, zlibCompression = 5, customPaletteCount = 16, monitorWidth = 0, monitorHeight = 0, monitorScale = 1;
+static int port = 80, width = -1, height = -1, zlibCompression = 5, customPaletteCount = 16, monitorWidth = 0, monitorHeight = 0, monitorArrayWidth = 0, monitorArrayHeight = 0, monitorScale = 1;
 static Vec3b customPalette[16];
 static uint16_t customPaletteMask = 0;
 
@@ -520,7 +520,8 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("mute", "m", "Remove audio from output"));
     options.addOption(Option("width", "W", "Resize the image to the specified width", false, "size", true).validator(new IntValidator(1, 65535)));
     options.addOption(Option("height", "H", "Resize the image to the specified height", false, "size", true).validator(new IntValidator(1, 65535)));
-    options.addOption(Option("monitor-size", "M", "Split the image into multiple parts for large monitors (images only)", false, "WxH[@S]", false).validator(new RegExpValidator("^[0-9]+x[0-9]+(?:@[0-5](?:\\.5)?)?$")));
+    options.addOption(Option("monitor-size", "M", "Split the image into multiple parts for large monitors", false, "WxH[@S]", false).validator(new RegExpValidator("^[0-9]+x[0-9]+(?:@[0-5](?:\\.5)?)?$")));
+    options.addOption(Option("trim-borders", "", "For multi-monitor images, skip pixels that would be hidden underneath monitor borders, keeping the image size consistent"));
     options.addOption(Option("disable-opencl", "", "Disable OpenCL computation; force CPU-only"));
     options.addOption(Option("help", "h", "Show this help"));
     OptionProcessor argparse(options);
@@ -577,21 +578,22 @@ int main(int argc, const char * argv[]) {
                 else if (option == "height") height = std::stoi(arg);
                 else if (option == "monitor-size") {
                     if (!arg.empty()) {
-                        monitorWidth = std::stoi(arg);
-                        monitorHeight = std::stoi(arg.substr(arg.find_first_of('x') + 1));
+                        monitorArrayWidth = std::stoi(arg);
+                        monitorArrayHeight = std::stoi(arg.substr(arg.find_first_of('x') + 1));
                         size_t pos = arg.find_first_of('@');
                         if (pos != std::string::npos) monitorScale = std::stod(arg.substr(pos + 1)) * 2;
-                        monitorWidth = round((64*monitorWidth - 20) / (6 * (monitorScale / 2.0))) * 2;
-                        monitorHeight = round((64*monitorHeight - 20) / (9 * (monitorScale / 2.0))) * 3;
-                    } else {monitorWidth = 328; monitorHeight = 243; monitorScale = 1;}
+                        monitorWidth = round((64*monitorArrayWidth - 20) / (6 * (monitorScale / 2.0))) * 2;
+                        monitorHeight = round((64*monitorArrayHeight - 20) / (9 * (monitorScale / 2.0))) * 3;
+                    } else {monitorArrayWidth = 8; monitorArrayHeight = 6; monitorWidth = 328; monitorHeight = 243; monitorScale = 1;}
                 }
+                else if (option == "trim-borders") trimBorders = true;
                 else if (option == "disable-opencl") disableOpenCL = true;
                 else if (option == "help") throw HelpException();
             }
         }
         argparse.checkRequired();
         if (!(mode == OutputType::HTTP || mode == OutputType::WebSocket) && output == "") throw MissingOptionException("Required option not specified: output");
-        if (monitorWidth && mode != OutputType::Default && mode != OutputType::Lua && mode != OutputType::BlitImage) throw InvalidArgumentException("Monitor splitting is only supported on Lua and BIMG outputs.");
+        if (monitorWidth && mode != OutputType::Default && mode != OutputType::Lua && mode != OutputType::BlitImage && !(mode == OutputType::Vid32 && !separateStreams)) throw InvalidArgumentException("Monitor splitting is only supported on Lua, BIMG, and 32vid outputs.");
     } catch (const OptionException &e) {
         if (e.className() != "HelpException") std::cerr << e.displayText() << "\n";
         HelpFormatter help(options);
@@ -874,8 +876,7 @@ int main(int argc, const char * argv[]) {
         }
         dfpwm_codec_ctx->sample_fmt = AV_SAMPLE_FMT_U8;
         dfpwm_codec_ctx->sample_rate = 48000;
-        dfpwm_codec_ctx->channels = 1;
-        dfpwm_codec_ctx->channel_layout = AV_CH_LAYOUT_MONO;
+        dfpwm_codec_ctx->ch_layout = AV_CHANNEL_LAYOUT_MONO;
         if ((error = avcodec_open2(dfpwm_codec_ctx, dfpwm_codec, NULL)) < 0) {
             std::cerr << "Could not open DFPWM codec: " << avErrorString(error) << "\n";
             if (sink_ctx) avfilter_free(sink_ctx);
@@ -1077,6 +1078,11 @@ int main(int argc, const char * argv[]) {
                         header.nstreams = 1;
                         header.flags = compression | VID32_FLAG_VIDEO_5BIT_CODES;
                         if (useDFPWM) header.flags |= VID32_FLAG_AUDIO_COMPRESSION_DFPWM;
+                        if (monitorWidth) {
+                            header.flags |= VID32_FLAG_VIDEO_MULTIMONITOR |
+                                VID32_FLAG_VIDEO_MULTIMONITOR_WIDTH(width / monitorWidth) |
+                                VID32_FLAG_VIDEO_MULTIMONITOR_HEIGHT(height / monitorHeight);
+                        }
                         outstream.write((char*)&header, 12);
                         outstream.write((char*)&combinedChunk, 9);
                     }
@@ -1088,9 +1094,8 @@ int main(int argc, const char * argv[]) {
                 sws_scale(resize_ctx, frame->data, frame->linesize, 0, frame->height, ptrs, stride);
                 rs.remove_last_line();
                 if (monitorWidth) {
-                    for (int y = 0; y < height; y += monitorHeight) {
-                        for (int x = 0; x < width; x += monitorWidth) {
-                            int mx = x / monitorWidth + 1, my = y / monitorHeight + 1;
+                    for (int y = 0, my = 1; y < height; my++, y += (trimBorders ? monitorArrayHeight * 128 / monitorScale / 3 : monitorHeight)) {
+                        for (int x = 0, mx = 1; x < width; mx++, x += (trimBorders ? monitorArrayWidth * 128 / monitorScale / 3 : monitorWidth)) {
                             int mw = min(width - x, monitorWidth), mh = min(height - y, monitorHeight);
                             Mat crop(mw, mh, device);
                             for (int line = 0; line < mh; line++) {
@@ -1101,12 +1106,40 @@ int main(int argc, const char * argv[]) {
                             size_t w, h;
                             convertImage(crop, &characters, &colors, palette, w, h, nframe);
                             if (mode == OutputType::Lua) outstream << "do local m,i,p=peripheral.wrap(monitors[" << my << "][" << mx << "])," << makeTable(characters, colors, palette, w / 2, h / 3, true) << "m.clear()m.setTextScale(" << (monitorScale / 2.0) << ")for i=0,#p do m.setPaletteColor(2^i,table.unpack(p[i]))end for y,r in ipairs(i)do m.setCursorPos(1,y)m.blit(table.unpack(r))end end\n";
-                            else outstream << makeTable(characters, colors, palette, w / 2, h / 3, binary, true, binary) << (binary ? "," : ",\n");
+                            else if (mode == OutputType::BlitImage) outstream << makeTable(characters, colors, palette, w / 2, h / 3, binary, true, binary) << (binary ? "," : ",\n");
+                            else if (mode == OutputType::Vid32) {
+                                std::string data;
+                                if (compression == VID32_FLAG_VIDEO_COMPRESSION_CUSTOM) data = make32vid_cmp(characters, colors, palette, w / 2, h / 3);
+                                else if (compression == VID32_FLAG_VIDEO_COMPRESSION_ANS) data = make32vid_ans(characters, colors, palette, w / 2, h / 3);
+                                else data = make32vid(characters, colors, palette, w / 2, h / 3);
+                                if (compression == VID32_FLAG_VIDEO_COMPRESSION_DEFLATE) {
+                                    unsigned long size = compressBound(videoStream.size());
+                                    uint8_t * buf = new uint8_t[size];
+                                    error = compress2(buf, &size, (const uint8_t*)videoStream.c_str(), videoStream.size(), compression);
+                                    if (error != Z_OK) {
+                                        std::cerr << "Could not compress video!\n";
+                                        delete[] buf;
+                                        goto cleanup;
+                                    }
+                                    data = std::string((const char*)buf + 2, size - 6);
+                                    delete[] buf;
+                                }
+                                uint32_t size = data.size();
+                                vid32stream.write((const char*)&size, 4);
+                                vid32stream.put((char)Vid32Chunk::Type::MultiMonitorVideo | ((mx - 1) << 3) | (my - 1));
+                                uint16_t tmp = w / 2;
+                                vid32stream.write((char*)&tmp, 2);
+                                tmp = h / 3;
+                                vid32stream.write((char*)&tmp, 2);
+                                vid32stream.write(data.c_str(), data.size());
+                                nframe_vid32++;
+                            }
                             outstream.flush();
                             delete[] characters;
                             delete[] colors;
                         }
                     }
+                    // TODO: subtitles?
                 } else {
                     uchar *characters, *colors;
                     std::vector<Vec3b> palette;
@@ -1197,23 +1230,33 @@ int main(int argc, const char * argv[]) {
         } else if (packet->stream_index == audio_stream && mode != OutputType::Lua && mode != OutputType::Raw && mode != OutputType::BlitImage && mode != OutputType::NFP && !mute) {
             avcodec_send_packet(audio_codec_ctx, packet);
             while ((error = avcodec_receive_frame(audio_codec_ctx, frame)) == 0) {
-                if (!resample_ctx) resample_ctx = swr_alloc_set_opts(NULL, AV_CH_LAYOUT_MONO, AV_SAMPLE_FMT_U8, 48000, frame->channel_layout, (AVSampleFormat)frame->format, frame->sample_rate, 0, NULL);
                 AVFrame * newframe = av_frame_alloc();
-                newframe->channel_layout = AV_CH_LAYOUT_MONO;
+                newframe->ch_layout = AV_CHANNEL_LAYOUT_MONO;
+                if (!resample_ctx) {
+                    if ((error = swr_alloc_set_opts2(&resample_ctx, &newframe->ch_layout, AV_SAMPLE_FMT_U8, 48000, &frame->ch_layout, (AVSampleFormat)frame->format, frame->sample_rate, 0, NULL)) < 0) {
+                        std::cerr << "Failed to initialize resampler: " << avErrorString(error) << "\n";
+                        av_frame_free(&newframe);
+                        continue;
+                    }
+                }
                 newframe->format = AV_SAMPLE_FMT_U8;
                 newframe->sample_rate = 48000;
                 if ((error = swr_convert_frame(resample_ctx, newframe, frame)) < 0) {
                     std::cerr << "Failed to convert audio: " << avErrorString(error) << "\n";
+                    av_frame_free(&newframe);
                     continue;
                 }
                 if (filter_graph) {
                     if ((error = av_buffersrc_add_frame(src_ctx, newframe)) < 0) {
                         std::cerr << "Could not push frame to filter: " << avErrorString(error) << "\n";
+                        av_frame_free(&newframe);
                         continue;
                     }
+                    av_frame_free(&newframe);
                     AVFrame * newframe2 = av_frame_alloc();
                     if ((error = av_buffersink_get_frame(sink_ctx, newframe2)) < 0) {
                         //std::cerr << "Could not pull frame from filter: " << avErrorString(error) << "\n";
+                        av_frame_free(&newframe2);
                         continue;
                     }
                     newframe = newframe2;

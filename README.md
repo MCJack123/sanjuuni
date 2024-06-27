@@ -135,6 +135,9 @@ The 32vid format consists of a number of streams, which can hold video, audio, o
 * Bits 0-1: Compression for video; 0 = none, 1 = custom ANS, 2 = DEFLATE, 3 = custom
 * Bits 2-3: Compression for audio; 0 = none (PCM), 1 = DFPWM
 * Bit 4: Always set to 1
+* Bit 5: Whether multiple monitors are required
+* Bit 6-8: Multiple monitor array width - 1 (if bit 5 is set)
+* Bit 9-11: Multiple monitor array height - 1 (if bit 5 is set)
 
 #### Streams
 | Offset | Bytes | Description                |
@@ -168,6 +171,8 @@ Video data is stored as a list of frames, with each frame consisting of packed p
 Pixels are grouped in tokens of 5 bytes/8 characters. If the characters cannot fit in a multiple of 8 characters, the token is right-padded with zeroes to fit. After pixel data, each cell's colors are written with one byte per cell, with the high nibble storing the background and the low nibble storing the text color. Finally, the palette is written as 16 sets of 24-bit RGB colors.
 
 The length of a frame can be determined with the formula `ceil(width * height / 8) * 5 + width * height`.
+
+For multi-monitor frames, the first 4 bytes contain the width and height of the encoded image (in characters), since the global width/height is different from the per-frame width/height.
 
 #### Custom video compression
 32vid implements a custom compression format for faster and more efficient compression. When custom compression is enabled, each frame is stored as a pair of screen and color blocks, each encoded using Huffman coding. The screen block uses 32 symbols corresponding to the 5-bit drawing characters, and the color block uses 24 symbols, with the low 16 representing the 16 colors, and the last 8 representing repeats of the last literal value from 2 to 256. (For example, a sequence of 8, 18, 19 means to repeat color 8 25 times.)

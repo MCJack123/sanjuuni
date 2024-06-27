@@ -226,6 +226,9 @@ template<typename T> inline T max(T a, T b) {return a > b ? a : b;}
 #define VID32_FLAG_AUDIO_COMPRESSION_NONE     0x0000
 #define VID32_FLAG_AUDIO_COMPRESSION_DFPWM    0x0004
 #define VID32_FLAG_VIDEO_5BIT_CODES           0x0010
+#define VID32_FLAG_VIDEO_MULTIMONITOR         0x0020
+#define VID32_FLAG_VIDEO_MULTIMONITOR_WIDTH(x)  ((x & 7) << 6)
+#define VID32_FLAG_VIDEO_MULTIMONITOR_HEIGHT(x) ((x & 7) << 9)
 
 struct Vid32Header {
     char magic[4];
@@ -254,7 +257,10 @@ struct Vid32Chunk {
         Subtitle2,
         Subtitle3,
         Subtitle4,
-        Combined
+        Combined,
+        CombinedIndex,
+
+        MultiMonitorVideo = 64
     };
 };
 

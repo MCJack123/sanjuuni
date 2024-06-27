@@ -19,6 +19,43 @@ if bit32_band(flags, 1) == 0 then file.close() error("DEFLATE or no compression 
 local _, nframes, ctype = ("<IIB"):unpack(file.read(9))
 if ctype ~= 0x0C then file.close() error("Stream type not supported by this tool") end
 
+local monitors, mawidth, maheight
+if bit32.btest(flags, 0x20) then
+    mawidth, maheight = bit32_band(bit32_rshift(flags, 6), 7) + 1, bit32_band(bit32_rshift(flags, 9), 7) + 1
+    monitors = settings.get('sanjuuni.multimonitor')
+    if not monitors or #monitors < maheight or #monitors[1] < mawidth then
+        term.clear()
+        term.setCursorPos(1, 1)
+        print('This video needs monitors to be calibrated before being displayed. Please right-click each monitor in order, from the top left corner to the bottom right corner, going right first, then down.\n')
+        monitors = {}
+        local a = {}
+        for b = 1, maheight do
+            monitors[b] = {}
+            for c = 1, mawidth do
+                local d, e = term.getCursorPos()
+                for f = 1, maheight do
+                    term.setCursorPos(3, e + f - 1)
+                    term.clearLine()
+                    for g = 1, mawidth do term.blit('\x8F ', g == c and f == b and '00' or '77', 'ff') end
+                end
+                term.setCursorPos(3, e + maheight)
+                term.write('(' .. c .. ', ' .. b .. ')')
+                term.setCursorPos(1, e)
+                repeat
+                    local d, h = os.pullEvent('monitor_touch')
+                    monitors[b][c] = h
+                until not a[h]
+                a[monitors[b][c]] = true
+                sleep(0.25)
+            end
+        end
+        settings.set('sanjuuni.multimonitor', monitors)
+        settings.save()
+        print('Calibration complete. Settings have been saved for future use.')
+    end
+    for _, r in ipairs(monitors) do for i, m in ipairs(r) do r[i] = peripheral.wrap(m) peripheral.call(m, "setTextScale", 0.5) peripheral.call(m, "clear") end end
+end
+
 local function readDict(size)
     local retval = {}
     for i = 0, size - 1, 2 do
@@ -101,7 +138,7 @@ local subs = {}
 term.clear()
 for _ = 1, nframes do
     local size, ftype = ("<IB"):unpack(file.read(5))
-    --print(size, ftype, file.seek())
+    print(size, ftype, file.seek())
     if ftype == 0 then
         if os.epoch "utc" - lastyield > 3000 then sleep(0) lastyield = os.epoch "utc" end
         local dcstart = os.epoch "utc"
@@ -163,6 +200,54 @@ for _ = 1, nframes do
         sub.frame, sub.length, sub.x, sub.y, sub.color, sub.flags, sub.text = ("<IIHHBBs2"):unpack(data)
         sub.bgColor, sub.fgColor = 2^bit32_rshift(sub.color, 4), 2^bit32_band(sub.color, 15)
         subs[#subs+1] = sub
+    elseif ftype >= 0x40 and ftype < 0x80 then
+        if ftype == 64 then vframe = vframe + 1 end
+        local mx, my = bit32_band(bit32_rshift(ftype, 3), 7) + 1, bit32_band(ftype, 7) + 1
+        print("(" .. mx .. ", " .. my .. ")")
+        local term = monitors[my][mx]
+        if os.epoch "utc" - lastyield > 3000 then sleep(0) lastyield = os.epoch "utc" end
+        local width, height = ("<HH"):unpack(file.read(4))
+        local dcstart = os.epoch "utc"
+        --print("init screen", vframe, file.seek())
+        init(false)
+        --print("read screen", vframe, file.seek())
+        local screen = read(width * height)
+        --print("init colors", vframe, file.seek())
+        init(true)
+        --print("read bg colors", vframe)
+        local bg = read(width * height)
+        --print("read fg colors", vframe)
+        local fg = read(width * height)
+        local dctime = os.epoch "utc" - dcstart
+        while os.epoch "utc" < start + vframe * 1000 / fps do end
+        local texta, fga, bga = {}, {}, {}
+        for y = 0, height - 1 do
+            local text, fgs, bgs = "", "", ""
+            for x = 1, width do
+                text = text .. string.char(128 + screen[y*width+x])
+                fgs = fgs .. blitColors[fg[y*width+x]]
+                bgs = bgs .. blitColors[bg[y*width+x]]
+            end
+            texta[y+1], fga[y+1], bga[y+1] = text, fgs, bgs
+        end
+        for i = 0, 15 do term.setPaletteColor(2^i, file.read() / 255, file.read() / 255, file.read() / 255) end
+        for y = 1, height do
+            term.setCursorPos(1, y)
+            term.blit(texta[y], fga[y], bga[y])
+        end
+        --[[local delete = {}
+        for i, v in ipairs(subs) do
+            if vframe <= v.frame + v.length then
+                term.setCursorPos(v.x, v.y)
+                term.setBackgroundColor(v.bgColor)
+                term.setTextColor(v.fgColor)
+                term.write(v.text)
+            else delete[#delete+1] = i end
+        end
+        for i, v in ipairs(delete) do table.remove(subs, v - i + 1) end]]
+        term.setCursorPos(1, height + 1)
+        term.clearLine()
+        print("Frame decode time:", dctime, "ms")
     else file.close() error("Unknown frame type " .. ftype) end
 end
 

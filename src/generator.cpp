@@ -616,7 +616,7 @@ public:
                 if (codes[i]->bits > 15) throw std::logic_error("Too many bits!");
                 codes[i]->code = (codes[i-1]->code + 1) << (codes[i]->bits - codes[i-1]->bits);
             }
-            R = 0;
+            R = 3;
             for (int i = 0; i < LsS; i++) R = max(R, codebook[i].bits);
             // make Huffman Ls
             std::vector<uint32_t> LsH(LsS);
