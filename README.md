@@ -67,6 +67,7 @@ ComputerCraft.
 
 -ifile, --input=file                   Input image or video
 -Sfile, --subtitle=file                ASS-formatted subtitle file to add to the video
+-fformat, --format=format              Force a format to use for the input file
 -opath, --output=path                  Output file path
 -l, --lua                              Output a Lua script file (default for images; only does one frame)
 -n, --nfp                              Output an NFP format image for use in paint (changes proportions!)
@@ -92,14 +93,16 @@ ComputerCraft.
 -Wsize, --width=size                   Resize the image to the specified width
 -Hsize, --height=size                  Resize the image to the specified height
 -M[WxH[@S]], --monitor-size[=WxH[@S]]  Split the image into multiple parts for large monitors (images only)
+--trim-borders                         For multi-monitor images, skip pixels that would be hidden underneath monitor borders, keeping the image size consistent
+--disable-opencl                       Disable OpenCL computation; force CPU-only
 -h, --help                             Show this help
 ```
 
 Custom palettes are specified as a list of 16 comma-separated 6-digit hex codes, optionally preceeded by `#`. Blank entries can be left empty or filled with an `X`. Example: `#FFFFFF,X,X,X,X,X,X,#999999,777777,,,,,,,#000000`
 
 ### Playback programs
-* `32vid-player.lua` plays back 32vid video/audio files from the disk. Simply give it the file name and it will decode and play the file.
-* `32vid-player-mini.lua` plays back a limited set of 32vid video/audio files from the disk or web in real-time. Simply give it the file name or URL and it will decode and play the file in real-time.
+* `32vid-player.lua` plays back separate-stream 32vid video/audio files from the disk. Simply give it the file name and it will decode and play the file. (Deprecated)
+* `32vid-player-mini.lua` plays back combined-stream 32vid video/audio files from the disk or web in real-time. Simply give it the file name or URL and it will decode and play the file in real-time.
 * `bimg-player.lua` displays BIMG images or animations. Simply give it the file name and it will decode and play the file.
 * `raw-player.lua` plays back raw video files from the disk. Simply give it the file name and it will decode and play the file.
 * `websocket-player.lua` plays a stream from a sanjuuni WebSocket server. Simply give it the WebSocket URL and it will play the stream, with audio if a speaker is attached.

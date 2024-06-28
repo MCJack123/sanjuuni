@@ -559,7 +559,7 @@ Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * 
         OpenCL::Memory<float> error(*device, image.width * (image.height + 1) * 3, 1, false, true);
         OpenCL::Memory<uint> workgroup_rider(*device, 1, 1, false, true);
         OpenCL::Memory<uint> workgroup_progress(*device, progress_size, 1, false, true);
-        OpenCL::Memory<uint> progress(*device, WORKGROUP_SIZE, 1, false, true);
+        OpenCL::LocalMemory<uint> progress(WORKGROUP_SIZE);
         device->get_cl_queue().enqueueFillBuffer<float>(error.get_cl_buffer(), 0.0f, 0, image.width * (image.height + 1) * 3 * sizeof(float));
         palette_mem.enqueue_write_to_device();
         image.upload();

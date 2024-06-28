@@ -36,6 +36,12 @@
     <None Include="configure.ac">
       <Filter>Resource Files</Filter>
     </None>
+    <None Include="32vid-player-mini.lua">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="bimg-player.lua">
+      <Filter>Resource Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\cc-pixel.cpp">
