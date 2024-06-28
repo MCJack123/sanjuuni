@@ -2,5 +2,5 @@ theme: jekyll-theme-minimal
 show_downloads: true
 logo: https://raw.githubusercontent.com/MCJack123/sanjuuni-ui/master/icon.png
 url: https://sanjuuni.madefor.cc
-gui_version: https://github.com/MCJack123/sanjuuni-ui/releases/latest/download/sanjuuni-ui-Win64.zip
+gui_version: https://github.com/MCJack123/sanjuuni-ui/releases/latest/download/sanjuuni-ui-Setup.exe
 cli_version: https://github.com/MCJack123/sanjuuni/releases/latest/download/sanjuuni-Win64.zip
