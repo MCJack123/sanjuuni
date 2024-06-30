@@ -30,7 +30,7 @@ AC_SEARCH_LIBS(avfilter_version, avfilter, [], [AC_MSG_ERROR([Could not find lib
 AC_SEARCH_LIBS(avformat_open_input, avformat, [], [AC_MSG_ERROR([Could not find libavformat library.])])
 AC_SEARCH_LIBS(av_frame_alloc, avutil, [], [AC_MSG_ERROR([Could not find libavutil library.])])
 AC_SEARCH_LIBS(sws_getContext, swscale, [], [AC_MSG_ERROR([Could not find libswscale library.])])
-AC_SEARCH_LIBS(swr_alloc_set_opts, swresample, [], [AC_MSG_ERROR([Could not find libswresample library.])])
+AC_SEARCH_LIBS(swr_alloc_set_opts2, swresample, [], [AC_MSG_ERROR([Could not find libswresample library.])])
 AC_SEARCH_LIBS(compress2, z, [], [AC_MSG_ERROR([Could not find zlib library.])])
 AX_CXX_CHECK_LIB(PocoFoundation, [Poco::ASCIIEncoding], [], [AC_MSG_ERROR([Could not find Poco Foundation library.])])
 AX_CXX_CHECK_LIB(PocoUtil, [Poco::Util::Timer], [], [AC_MSG_ERROR([Could not find Poco Util library.])])

@@ -4634,9 +4634,9 @@ else case e in #(
 esac
 fi
 
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for library containing swr_alloc_set_opts" >&5
-printf %s "checking for library containing swr_alloc_set_opts... " >&6; }
-if test ${ac_cv_search_swr_alloc_set_opts+y}
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for library containing swr_alloc_set_opts2" >&5
+printf %s "checking for library containing swr_alloc_set_opts2... " >&6; }
+if test ${ac_cv_search_swr_alloc_set_opts2+y}
 then :
   printf %s "(cached) " >&6
 else case e in #(
@@ -4645,12 +4645,12 @@ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
 namespace conftest {
-  extern "C" int swr_alloc_set_opts ();
+  extern "C" int swr_alloc_set_opts2 ();
 }
 int
 main (void)
 {
-return conftest::swr_alloc_set_opts ();
+return conftest::swr_alloc_set_opts2 ();
   ;
   return 0;
 }
@@ -4665,29 +4665,29 @@ do
   fi
   if ac_fn_cxx_try_link "$LINENO"
 then :
-  ac_cv_search_swr_alloc_set_opts=$ac_res
+  ac_cv_search_swr_alloc_set_opts2=$ac_res
 fi
 rm -f core conftest.err conftest.$ac_objext conftest.beam \
     conftest$ac_exeext
-  if test ${ac_cv_search_swr_alloc_set_opts+y}
+  if test ${ac_cv_search_swr_alloc_set_opts2+y}
 then :
   break
 fi
 done
-if test ${ac_cv_search_swr_alloc_set_opts+y}
+if test ${ac_cv_search_swr_alloc_set_opts2+y}
 then :
 
 else case e in #(
-  e) ac_cv_search_swr_alloc_set_opts=no ;;
+  e) ac_cv_search_swr_alloc_set_opts2=no ;;
 esac
 fi
 rm conftest.$ac_ext
 LIBS=$ac_func_search_save_LIBS ;;
 esac
 fi
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_search_swr_alloc_set_opts" >&5
-printf "%s\n" "$ac_cv_search_swr_alloc_set_opts" >&6; }
-ac_res=$ac_cv_search_swr_alloc_set_opts
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_search_swr_alloc_set_opts2" >&5
+printf "%s\n" "$ac_cv_search_swr_alloc_set_opts2" >&6; }
+ac_res=$ac_cv_search_swr_alloc_set_opts2
 if test "$ac_res" != no
 then :
   test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
