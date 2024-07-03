@@ -213,4 +213,4 @@ Index tables MAY be stored at either the beginning or end of the file. If your a
 It's possible to use much of the core of sanjuuni as a library for other programs. To do this, simply include all files but `sanjuuni.cpp` in your program, and include `sanjuuni.hpp` in the source you want to use sanjuuni in. Then create a global `WorkQueue work` variable in your source, which is used to delegate tasks to threads. Then use any of the functions in `sanjuuni.hpp` as you need. Basic documentation is available in the header.
 
 ## License
-sanjuuni is licensed under the GPL license.
+sanjuuni is licensed under the GPLv2 license. Player files are licensed under separate licenses - see the header of each file for more info.

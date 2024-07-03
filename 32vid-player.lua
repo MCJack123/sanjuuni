@@ -1,3 +1,6 @@
+-- 32vid-player from sanjuuni
+-- Licensed under the MIT license
+
 local inflate do
 
     local floor = math.floor

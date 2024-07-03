@@ -1,3 +1,6 @@
+-- 32vid-player-mini from sanjuuni
+-- Licensed under the MIT license
+
 local bit32_band, bit32_lshift, bit32_rshift, math_frexp = bit32.band, bit32.lshift, bit32.rshift, math.frexp
 local function log2(n) local _, r = math_frexp(n) return r-1 end
 local dfpwm = require "cc.audio.dfpwm"

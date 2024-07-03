@@ -1,3 +1,6 @@
+-- bimg-player from sanjuuni
+-- Licensed in the public domain/CC0
+
 local path = ...
 if not path then error("Usage: bimg-player <file.bimg>") end
 local file, err = fs.open(shell.resolve(path), "rb")

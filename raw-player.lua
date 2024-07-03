@@ -1,3 +1,6 @@
+-- raw-player from sanjuuni
+-- Licensed under the MIT license
+
 local b64str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 local function base64decode(str)
     local retval = ""

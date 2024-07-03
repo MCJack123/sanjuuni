@@ -1,3 +1,6 @@
+-- websocket-player from sanjuuni
+-- Licensed in the public domain/CC0
+
 local ws, err = http.websocket(...)
 if not ws then error("Could not connect to WebSocket server: " .. err) end
 ws.send("n")
