@@ -27,7 +27,10 @@ RUN set -eux; \
     libgcc \
     zlib \
     poco \
-    ffmpeg
+    ffmpeg-libavformat \
+    ffmpeg-libavfilter \
+    ffmpeg-libavdevice \
+    ffmpeg-libswscale
 
 COPY --from=build /tmp/sanjuuni/sanjuuni /usr/local/bin
 
