@@ -53,7 +53,7 @@ Images are currently only available for `x86_64`. If you need support for anothe
 Run the following:
 
 ```sh
-docker run --rm -v .:/srv/sanjuuni ghcr.io/MCJack123/sanjuuni:latest
+docker run --rm -v .:/srv/sanjuuni ghcr.io/mcjack123/sanjuuni:latest
 ```
 
 #### GPU (OpenCL)
@@ -66,7 +66,7 @@ If you need support for another GPU driver then open an issue.
 Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) and use this as your run command:
 
 ```sh
-docker run --rm -v .:/srv/sanjuuni --runtime=nvidia --gpus all ghcr.io/MCJack123/sanjuuni:nvidia-latest
+docker run --rm -v .:/srv/sanjuuni --runtime=nvidia --gpus all ghcr.io/mcjack123/sanjuuni:nvidia-latest
 ```
 
 ## Building
