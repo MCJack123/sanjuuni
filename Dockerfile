@@ -1,8 +1,4 @@
-FROM alpine:3.20.1 AS base
-
-# CVE-2024-5535 - remove when base image updated
-RUN set -eux; \
-    apk add --no-cache --update openssl
+FROM alpine:3.20.2 AS base
 
 FROM base AS build
 
