@@ -209,6 +209,15 @@ This chunk type stores an index table for the audio/video stream, which can spee
 
 Index tables MAY be stored at either the beginning or end of the file. If your application is looking for an index table and it is not the first stream, seek past the combo stream and check whether it's after the stream. sanjuuni stores the index at the end for efficiency.
 
+## Multi-monitor usage
+sanjuuni 0.5 adds support for natively creating multi-monitor images and videos. These images are higher-quality than using a program like staple on a huge single image, as each monitor is independently processed to create a unique palette per region of the image. Multi-monitor can be enabled by adding the `-M`/`--monitor-size` flag to the command line. The parameter can take an optional argument used to set the size of each monitor - this defaults to 8x6 monitors at 0.5x scale, but if you want to use a different scale, or you changed the CC config's monitor size limit, you can pass a string in the form of `<width>x<height>` or `<width>x<height>@<scale>` to change it.
+
+Multi-monitor is only supported in Lua, BIMG, and 32vid output formats. If you use BIMG, you'll need to use the player that comes with sanjuuni, as it uses a special extension of the BIMG format that isn't implemented in other players.
+
+When you load a multi-monitor image for the first time, you'll need to calibrate the display setup to ensure the right monitors are used. A screen will appear on the main monitor to indicate which monitor in the array it's looking for. To calibrate, simply right-click on each monitor in order from left to right, top to bottom, using the same size as is displayed on screen (i.e. if your array is 3x3 but the image only needs 2x3, don't right-click on the rightmost monitor column). Once completed, the image or video will be displayed on the array, and the configuration will be saved in the `settings` API for later use.
+
+The default multi-monitor output doesn't account for screen borders, which means that while all the pixels in the image will be shown, the image may appear distorted across the edges of each monitor. To resolve this, pass the `--trim-borders` option, which will account for the space taken up by the borders.
+
 ## Library usage
 It's possible to use much of the core of sanjuuni as a library for other programs. To do this, simply include all files but `sanjuuni.cpp` in your program, and include `sanjuuni.hpp` in the source you want to use sanjuuni in. Then create a global `WorkQueue work` variable in your source, which is used to delegate tasks to threads. Then use any of the functions in `sanjuuni.hpp` as you need. Basic documentation is available in the header.
 
