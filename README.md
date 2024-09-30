@@ -95,6 +95,7 @@ ComputerCraft.
 -M[WxH[@S]], --monitor-size[=WxH[@S]]  Split the image into multiple parts for large monitors (images only)
 --trim-borders                         For multi-monitor images, skip pixels that would be hidden underneath monitor borders, keeping the image size consistent
 --disable-opencl                       Disable OpenCL computation; force CPU-only
+--disable-opencl-device-info           Disable OpenCL device info
 -h, --help                             Show this help
 ```
 

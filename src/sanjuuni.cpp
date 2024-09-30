@@ -457,7 +457,7 @@ void renderSubtitles(const std::unordered_multimap<int, ASSSubtitleEvent>& subti
 static std::unordered_multimap<int, ASSSubtitleEvent> subtitles;
 static OpenCL::Device * device = NULL;
 static std::string input, output, subtitle, format;
-static bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false, disableOpenCL = false, separateStreams = false, trimBorders = false;
+static bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false, disableOpenCL = false, disableOpenCLDeviceInfo = false, separateStreams = false, trimBorders = false;
 static OutputType mode = OutputType::Default;
 static int compression = VID32_FLAG_VIDEO_COMPRESSION_ANS;
 static int port = 80, width = -1, height = -1, zlibCompression = 5, customPaletteCount = 16, monitorWidth = 0, monitorHeight = 0, monitorArrayWidth = 0, monitorArrayHeight = 0, monitorScale = 1;
@@ -523,6 +523,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("monitor-size", "M", "Split the image into multiple parts for large monitors", false, "WxH[@S]", false).validator(new RegExpValidator("^[0-9]+x[0-9]+(?:@[0-5](?:\\.5)?)?$")));
     options.addOption(Option("trim-borders", "", "For multi-monitor images, skip pixels that would be hidden underneath monitor borders, keeping the image size consistent"));
     options.addOption(Option("disable-opencl", "", "Disable OpenCL computation; force CPU-only"));
+    options.addOption(Option("disable-opencl-device-info", "", "Disable OpenCL device info"));
     options.addOption(Option("help", "h", "Show this help"));
     OptionProcessor argparse(options);
     argparse.setUnixStyle(true);
@@ -588,6 +589,7 @@ int main(int argc, const char * argv[]) {
                 }
                 else if (option == "trim-borders") trimBorders = true;
                 else if (option == "disable-opencl") disableOpenCL = true;
+                else if (option == "disable-opencl-device-info") disableOpenCLDeviceInfo = true;
                 else if (option == "help") throw HelpException();
             }
         }
@@ -984,7 +986,7 @@ int main(int argc, const char * argv[]) {
 #ifdef HAS_OPENCL
     if (!disableOpenCL) {
         try {
-            device = new OpenCL::Device(OpenCL::select_device_with_most_flops());
+            device = new OpenCL::Device(OpenCL::select_device_with_most_flops(OpenCL::get_devices(!disableOpenCLDeviceInfo), !disableOpenCLDeviceInfo));
             /*Mat testImage(2, 2, device);
             testImage.at(0, 0) = {255, 0, 0};
             testImage.at(0, 1) = {255, 255, 0};
