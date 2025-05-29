@@ -1,0 +1,44 @@
+#!/usr/bin/env dockerfile-shebang
+
+FROM ubuntu:24.04 AS base
+
+FROM base AS build
+
+COPY configure Makefile.in /tmp/sanjuuni/
+COPY src /tmp/sanjuuni/src
+
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+  ocl-icd-opencl-dev \
+  clang \
+  make \
+  libavformat-dev \
+  libavdevice-dev \
+  libpoco-dev; \
+  cd /tmp/sanjuuni; \
+  ./configure; \
+  make
+
+FROM base
+
+COPY --from=build /tmp/sanjuuni/sanjuuni /usr/local/bin
+
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+  libavformat60 \
+  libavdevice60 \
+  libpococrypto80t64 \
+  libpoconetssl80t64 \
+  ocl-icd-libopencl1; \
+  mkdir -p /etc/OpenCL/vendors; \
+  echo "libnvidia-opencl.so.1" > /etc/OpenCL/vendors/nvidia.icd
+
+ENV \
+  NVIDIA_VISIBLE_DEVICES=all \
+  NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+WORKDIR /srv/sanjuuni
+
+ENTRYPOINT ["sanjuuni"]
