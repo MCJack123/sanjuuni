@@ -28,7 +28,8 @@
 #define OPENCL_HPP
 
 #define WORKGROUP_SIZE 64 // needs to be 64 to fully use AMD GPUs
-#define CL_HPP_TARGET_OPENCL_VERSION 300
+#define CL_HPP_TARGET_OPENCL_VERSION 120
+#define CL_HPP_MINIMUM_OPENCL_VERSION 100
 //#define PTX
 //#define LOG
 
