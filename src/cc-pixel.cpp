@@ -500,7 +500,7 @@ __kernel void copyColors(__global const uchar * input, __global uchar * colors, 
     __private ulong y = get_global_id(0) * 2 / width, x = get_global_id(0) * 2 % width;
     if (y >= height) return;
     colors[(y-y%3)*width + x*3 + (y%3)*2] = input[y*width+x];
-    colors[(y-y%3)*width + x*3 + (y%3)*2 + 1] = x == height - 1 ? 15 : input[y*width+x+1];
+    colors[(y-y%3)*width + x*3 + (y%3)*2 + 1] = x == width - 1 ? 15 : input[y*width+x+1];
 }
 
 __kernel void calculateRange_A(__global const uchar * input, __global uchar * ranges, ulong n, ulong offset) {

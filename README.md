@@ -218,6 +218,14 @@ When you load a multi-monitor image for the first time, you'll need to calibrate
 
 The default multi-monitor output doesn't account for screen borders, which means that while all the pixels in the image will be shown, the image may appear distorted across the edges of each monitor. To resolve this, pass the `--trim-borders` option, which will account for the space taken up by the borders.
 
+## Tools
+sanjuuni includes a few extra utilities for both PC and CC use:
+- `tools/32vid-player` (not the Lua file) contains a minimal player program for 32vid files. It requires SDL3 to be installed, and will fail to build if not installed.
+- `tools/32vid-streamer` replicates the sanjuuni WebSocket server using a preconverted 32vid file, instead of converting on-the-fly.
+- `tools/lib32vid.lua` contains a Lua library for decoding and playing 32vid files.
+
+The desktop tools are not built automatically - use `make tools` to build them.
+
 ## Library usage
 It's possible to use much of the core of sanjuuni as a library for other programs. To do this, simply include all files but `sanjuuni.cpp` in your program, and include `sanjuuni.hpp` in the source you want to use sanjuuni in. Then create a global `WorkQueue work` variable in your source, which is used to delegate tasks to threads. Then use any of the functions in `sanjuuni.hpp` as you need. Basic documentation is available in the header.
 

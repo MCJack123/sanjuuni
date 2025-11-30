@@ -5,17 +5,26 @@ LDFLAGS=@LDFLAGS@
 LIBS=@LIBS@
 SED=@SED@
 SDIR=@srcdir@/src
+TDIR=$(SDIR)/../tools
 ODIR=obj
-_OBJ=cc-pixel.o cc-pixel-cl.o generator.o octree.o quantize.o sanjuuni.o
+_OBJ=cc-pixel.o cc-pixel-cl.o generator.o octree.o quantize.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 
 all: $(ODIR) sanjuuni
 
+tools: $(TDIR)/32vid-player $(TDIR)/32vid-streamer
+
 $(ODIR):
 	mkdir $@
 
-sanjuuni: $(OBJ)
+sanjuuni: $(OBJ) $(ODIR)/sanjuuni.o
 	$(CXX) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+$(TDIR)/32vid-player: $(TDIR)/32vid-player.cpp $(SDIR)/sanjuuni.hpp
+	$(CXX) -I$(SDIR) $(CPPFLAGS) $(CXXFLAGS) -o $@ $< $(LIBS)
+
+$(TDIR)/32vid-streamer: $(TDIR)/32vid-streamer.cpp $(OBJ)
+	$(CXX) -I$(SDIR) $(CPPFLAGS) $(CXXFLAGS) -o $@ $^ $(LIBS)
 
 $(SDIR)/cc-pixel-cl.cpp: $(SDIR)/cc-pixel.cpp
 	printf '// Generated automatically; do not edit!\n#include <string>\nnamespace OpenCL {std::string get_opencl_c_code() { return ' > $@
@@ -28,5 +37,9 @@ $(ODIR)/%.o: $(SDIR)/%.cpp $(SDIR)/sanjuuni.hpp $(SDIR)/opencl.hpp
 clean:
 	rm $(ODIR)/*
 	rm sanjuuni
+	rm $(TDIR)/32vid-player
+	rm $(TDIR)/32vid-streamer
 
 rebuild: clean sanjuuni
+
+.PHONY: all tools clean rebuild

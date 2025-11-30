@@ -22,6 +22,7 @@ AC_CHECK_HEADERS([Poco/Net/HTTPServer.h], [], [NO_NET=1])
 AC_CHECK_HEADERS([Poco/Net/HTTPSClientSession.h], [], [NO_NET=1])
 AC_CHECK_HEADERS([Poco/Crypto/X509Certificate.h], [], [NO_NET=1])
 AC_CHECK_HEADERS([CL/opencl.hpp], [], [HAS_OPENCL=0])
+AC_CHECK_HEADERS([SDL3/SDL.h], [], [])
 
 AC_SEARCH_LIBS(pthread_create, pthread, [], [AC_MSG_ERROR([Could not find pthread library.])])
 AC_SEARCH_LIBS(avcodec_find_decoder, avcodec, [], [AC_MSG_ERROR([Could not find libavcodec library.])])
@@ -32,6 +33,7 @@ AC_SEARCH_LIBS(av_frame_alloc, avutil, [], [AC_MSG_ERROR([Could not find libavut
 AC_SEARCH_LIBS(sws_getContext, swscale, [], [AC_MSG_ERROR([Could not find libswscale library.])])
 AC_SEARCH_LIBS(swr_alloc_set_opts2, swresample, [], [AC_MSG_ERROR([Could not find libswresample library.])])
 AC_SEARCH_LIBS(compress2, z, [], [AC_MSG_ERROR([Could not find zlib library.])])
+AC_SEARCH_LIBS(SDL_Init, SDL3, [], [])
 AX_CXX_CHECK_LIB(PocoFoundation, [Poco::ASCIIEncoding], [], [AC_MSG_ERROR([Could not find Poco Foundation library.])])
 AX_CXX_CHECK_LIB(PocoUtil, [Poco::Util::Timer], [], [AC_MSG_ERROR([Could not find Poco Util library.])])
 if test "x$NO_NET" != "x1"; then

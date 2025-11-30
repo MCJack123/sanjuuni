@@ -346,14 +346,14 @@ extern std::vector<Vec3b> convertLabPalette(const std::vector<Vec3b>& palette);
 extern Vec3b nearestColor(const std::vector<Vec3b>& palette, const Vec3d& color, int* _n = NULL);
 /**
  * Generates an optimized palette for an image using the median cut algorithm.
- * @param iamge The image to generate a palette for
+ * @param image The image to generate a palette for
  * @param numColors The number of colors to get (must be a power of 2)
  * @return An optimized palette for the image
  */
 extern std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::Device * device = NULL);
 /**
  * Generates an optimized palette for an image using the k-means algorithm.
- * @param iamge The image to generate a palette for
+ * @param image The image to generate a palette for
  * @param numColors The number of colors to get
  * @return An optimized palette for the image
  */
