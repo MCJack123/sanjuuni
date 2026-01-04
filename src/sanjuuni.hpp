@@ -308,6 +308,14 @@ extern WorkQueue work;
  */
 extern void toCCPixel(const uchar * colors, uchar * character, uchar * color, const uchar * palette, ulong size = 1);
 
+/**
+ * Converts a 2x3 array of colors into low-resolution background colors using the specified palette.
+ * @param colors A 6-long array of pixel values (0-15), from top-left, top-right, ..., bottom-right
+ * @param color A pointer to the resulting color (will be shifted up by 4)
+ * @param size Reserved for OpenCL
+ */
+extern void toNFPPixel(const uchar * colors, uchar * color, ulong size = 1);
+
 /* octree */
 /**
  * Generates an optimized palette for an image using octrees.
@@ -401,6 +409,15 @@ extern Mat1b rgbToPaletteImage(Mat& image, const std::vector<Vec3b>& palette, Op
  * be freed with `delete[]` once finished
  */
 extern void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols, OpenCL::Device * device = NULL);
+/**
+ * Converts an indexed image into a character-based format suitable for CC. This
+ * uses an "NFP" algorithm which only generates background colors, reducing
+ * visible resolution, but saving space when compressed.
+ * @param input The image to convert
+ * @param cols A pointer to the destination color pair array pointer - this must
+ * be freed with `delete[]` once finished
+ */
+extern void makeNFPCCImage(Mat1b& input, uchar** cols, OpenCL::Device * device = NULL);
 /**
  * Generates a blit table from the specified CC image.
  * @param characters The character array to use

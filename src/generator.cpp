@@ -141,8 +141,7 @@ namespace Poco {
 
 static const char * hexstr = "0123456789abcdef";
 
-struct makeCCImage_state {
-    int i;
+struct makeCCImage_params {
     uchar* colors;
     uchar** chars;
     uchar** cols;
@@ -150,9 +149,22 @@ struct makeCCImage_state {
     ulong size;
 };
 
+struct makeCCImage_state {
+    makeCCImage_params * params;
+    int i;
+};
+
 static void makeCCImage_worker(void* s) {
     makeCCImage_state * state = (makeCCImage_state*)s;
-    toCCPixel(state->colors + (state->i * 6), *state->chars + state->i, *state->cols + state->i, state->pal, state->size);
+    makeCCImage_params * params = state->params;
+    toCCPixel(params->colors + (state->i * 6), *params->chars + state->i, *params->cols + state->i, params->pal, params->size);
+    delete state;
+}
+
+static void makeNFPCCImage_worker(void* s) {
+    makeCCImage_state * state = (makeCCImage_state*)s;
+    makeCCImage_params * params = state->params;
+    toNFPPixel(params->colors + (state->i * 6), *params->cols + state->i, params->size);
     delete state;
 }
 
@@ -205,8 +217,58 @@ void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars,
         }
         *chars = new uchar[(height / 3) * (width / 2)];
         *cols = new uchar[(height / 3) * (width / 2)];
+        makeCCImage_params params = {colors, chars, cols, pal, (ulong)(width * height)};
         for (int i = 0; i < (height / 3) * (width / 2); i++)
-            work.push(makeCCImage_worker, new makeCCImage_state {i, colors, chars, cols, pal, (ulong)(width * height)});
+            work.push(makeCCImage_worker, new makeCCImage_state {&params, i});
+        work.wait();
+        delete[] colors;
+#ifdef HAS_OPENCL
+    }
+#endif
+}
+
+void makeNFPCCImage(Mat1b& input, uchar** cols, OpenCL::Device * device) {
+    int width = input.width - input.width % 2, height = input.height - input.height % 3;
+#ifdef HAS_OPENCL
+    if (device != NULL) {
+        *cols = new uchar[(height / 3) * (width / 2)];
+        input.upload();
+        try {
+            OpenCL::Memory<uchar> colors_mem(*device, height * width / 6, 6, false, true);
+            OpenCL::Memory<uchar> cols_mem(*device, (height / 3) * (width / 2), 1, *cols);
+            OpenCL::Kernel copykernel(*device, height * width / 2, "copyColors", *input.mem, colors_mem, (ulong)width, (ulong)height);
+            OpenCL::Kernel kernel(*device, height * width / 6, "toNFPPixel", colors_mem, cols_mem, (ulong)(width * height));
+            copykernel.enqueue_run();
+            kernel.enqueue_run();
+            cols_mem.enqueue_read_from_device();
+            device->finish_queue();
+        } catch (std::exception &e) {
+            delete[] *cols;
+            *cols = NULL;
+            throw e;
+        }
+    } else {
+#endif
+        input.download();
+        uchar * colors = new uchar[height * width];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x+=2) {
+                if (input[y][x] > 15) {
+                    delete[] colors;
+                    throw std::runtime_error("Too many colors (1)");
+                }
+                if (input[y][x+1] > 15) {
+                    delete[] colors;
+                    throw std::runtime_error("Too many colors (2)");
+                }
+                colors[(y-y%3)*width + x*3 + (y%3)*2] = input[y][x];
+                colors[(y-y%3)*width + x*3 + (y%3)*2 + 1] = input[y][x+1];
+            }
+        }
+        *cols = new uchar[(height / 3) * (width / 2)];
+        makeCCImage_params params = {colors, NULL, cols, NULL, (ulong)(width * height)};
+        for (int i = 0; i < (height / 3) * (width / 2); i++)
+            work.push(makeNFPCCImage_worker, new makeCCImage_state {&params, i});
         work.wait();
         delete[] colors;
 #ifdef HAS_OPENCL
@@ -220,7 +282,7 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
     for (int y = 0; y < height; y++) {
         std::string text, fg, bg;
         for (int x = 0; x < width; x++) {
-            uchar c = characters[y*width+x], cc = colors[y*width+x];
+            uchar c = (characters ? characters[y*width+x] : 0), cc = colors[y*width+x];
             if ((binary || (c >= 32 && c < 127)) && c != '"' && c != '\\') text += c;
             else text += (c < 10 ? "\\00" : (c < 100 ? "\\0" : "\\")) + std::to_string(c);
             fg += hexstr[cc & 0xf];
@@ -245,20 +307,32 @@ std::string makeTable(const uchar * characters, const uchar * colors, const std:
 
 std::string makeNFP(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height) {
     std::stringstream retval;
-    for (int y = 0; y < height; y++) {
-        std::string lines[3];
-        for (int x = 0; x < width; x++) {
-            int offset = y*height+x;
-            char fg = hexstr[colors[offset]&0xf], bg = hexstr[colors[offset]>>4];
-            uchar ch = characters[offset];
-            lines[0] += ch & 1 ? fg : bg;
-            lines[0] += ch & 2 ? fg : bg;
-            lines[1] += ch & 4 ? fg : bg;
-            lines[1] += ch & 8 ? fg : bg;
-            lines[2] += ch & 16 ? fg : bg;
-            lines[2] += bg;
+    if (characters == NULL) {
+        for (int y = 0; y < height; y++) {
+            std::string line;
+            for (int x = 0; x < width; x++) {
+                int offset = y*width+x;
+                char bg = hexstr[colors[offset]>>4];
+                line += bg;
+            }
+            retval << line << "\n";
         }
-        retval << lines[0] << "\n" << lines[1] << "\n" << lines[2] << "\n";
+    } else {
+        for (int y = 0; y < height; y++) {
+            std::string lines[3];
+            for (int x = 0; x < width; x++) {
+                int offset = y*width+x;
+                char fg = hexstr[colors[offset]&0xf], bg = hexstr[colors[offset]>>4];
+                uchar ch = characters[offset];
+                lines[0] += ch & 1 ? fg : bg;
+                lines[0] += ch & 2 ? fg : bg;
+                lines[1] += ch & 4 ? fg : bg;
+                lines[1] += ch & 8 ? fg : bg;
+                lines[2] += ch & 16 ? fg : bg;
+                lines[2] += bg;
+            }
+            retval << lines[0] << "\n" << lines[1] << "\n" << lines[2] << "\n";
+        }
     }
     return retval.str();
 }
@@ -269,22 +343,34 @@ std::string makeRawImage(const uchar * screen, const uchar * colors, const std::
     output.write((char*)&width, 2);
     output.write((char*)&height, 2);
     for (int i = 0; i < 8; i++) output.put(0);
-    unsigned char c = screen[0];
+    unsigned char c = screen ? screen[0] : 0;
     unsigned char n = 0;
-    for (unsigned y = 0; y < height; y++) {
-        for (unsigned x = 0; x < width; x++) {
-            if (screen[y*width+x] != c || n == 255) {
-                output.put(c);
-                output.put(n);
-                c = screen[y*width+x];
-                n = 0;
-            }
-            n++;
+    if (screen == NULL) {
+        unsigned s = height * width;
+        for (unsigned i = 0; i < s / 255; i++) {
+            output.put(0);
+            output.put(255);
         }
-    }
-    if (n > 0) {
-        output.put(c);
-        output.put(n);
+        if (s % 255) {
+            output.put(0);
+            output.put(s % 255);
+        }
+    } else {
+        for (unsigned y = 0; y < height; y++) {
+            for (unsigned x = 0; x < width; x++) {
+                if (screen[y*width+x] != c || n == 255) {
+                    output.put(c);
+                    output.put(n);
+                    c = screen[y*width+x];
+                    n = 0;
+                }
+                n++;
+            }
+        }
+        if (n > 0) {
+            output.put(c);
+            output.put(n);
+        }
     }
     c = colors[0];
     n = 0;
@@ -336,7 +422,7 @@ std::string make32vid(const uchar * characters, const uchar * colors, const std:
     uint64_t next5bit = 0;
     uchar next5bit_pos = 0;
     for (int i = 0; i < width * height; i++) {
-        next5bit = (next5bit << 5) | (characters[i] & 0x1F);
+        next5bit = (next5bit << 5) | (characters ? characters[i] & 0x1F : 0);
         col += colors[i];
         if (++next5bit_pos == 8) {
             screen += (char)((next5bit >> 32) & 0xFF);
@@ -416,7 +502,7 @@ std::string make32vid_cmp(const uchar * characters, const uchar * colors, const 
     bool fset = false, bset = false;
     // add weights for Huffman coding
     for (int i = 0; i < width * height; i++) {
-        screen_nodes[characters[i] & 0x1F].weight++;
+        screen_nodes[characters ? characters[i] & 0x1F : 0].weight++;
         // RLE encode colors
         uchar fg = colors[i] & 0x0F, bg = colors[i] >> 4;
         bool ok = true;
@@ -812,7 +898,7 @@ std::string make32vid_ans(const uchar * characters, const uchar * colors, const 
     bool fset = false, bset = false;
     // add weights for Huffman coding
     for (int i = 0; i < width * height; i++) {
-        screen_freq[characters[i] & 0x1F]++;
+        screen_freq[characters ? characters[i] & 0x1F : 0]++;
         // RLE encode colors
         uchar fg = colors[i] & 0x0F, bg = colors[i] >> 4;
         bool ok = true;

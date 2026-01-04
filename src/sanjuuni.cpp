@@ -457,7 +457,7 @@ void renderSubtitles(const std::unordered_multimap<int, ASSSubtitleEvent>& subti
 static std::unordered_multimap<int, ASSSubtitleEvent> subtitles;
 static OpenCL::Device * device = NULL;
 static std::string input, output, subtitle, format;
-static bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false, disableOpenCL = false, separateStreams = false, trimBorders = false;
+static bool useDefaultPalette = false, noDither = false, useOctree = false, useKmeans = false, mute = false, binary = false, ordered = false, useLab = false, disableOpenCL = false, separateStreams = false, trimBorders = false, nfpize = false;
 static OutputType mode = OutputType::Default;
 static int compression = VID32_FLAG_VIDEO_COMPRESSION_ANS;
 static int port = 80, width = -1, height = -1, zlibCompression = 5, customPaletteCount = 16, monitorWidth = 0, monitorHeight = 0, monitorArrayWidth = 0, monitorArrayHeight = 0, monitorScale = 1;
@@ -486,8 +486,9 @@ static void convertImage(Mat& rs, uchar ** characters, uchar ** colors, std::vec
     else out = ditherImage(labImage, palette, device);
     Mat1b pimg = rgbToPaletteImage(out, palette, device);
     if (useLab && !useDefaultPalette) palette = convertLabPalette(palette);
-    makeCCImage(pimg, palette, characters, colors, device);
-    if (!subtitle.empty() && mode != OutputType::Vid32) renderSubtitles(subtitles, nframe, *characters, *colors, palette, pimg.width, pimg.height);
+    if (nfpize) makeNFPCCImage(pimg, colors, device);
+    else makeCCImage(pimg, palette, characters, colors, device);
+    if (!subtitle.empty() && mode != OutputType::Vid32 && !nfpize) renderSubtitles(subtitles, nframe, *characters, *colors, palette, pimg.width, pimg.height);
     width = pimg.width; height = pimg.height;
 }
 
@@ -515,6 +516,7 @@ int main(int argc, const char * argv[]) {
     options.addOption(Option("kmeans", "k", "Use k-means for highest quality color conversion (slowest)"));
     options.addOption(Option("compression", "c", "Compression type for 32vid videos; available modes: none|ans|deflate|custom", false, "mode", true).validator(new RegExpValidator("^(none|lzw|deflate|custom)$")));
     options.addOption(Option("binary", "B", "Output blit image files in a more-compressed binary format (requires opening the file in binary mode)"));
+    options.addOption(Option("nfpize", "N", "Reduce visual resolution to NFP quality - good for compressed formats, or for keeping aspect ratio in NFP outputs"));
     options.addOption(Option("separate-streams", "S", "Output 32vid files using separate streams (slower to decode)"));
     options.addOption(Option("dfpwm", "d", "Use DFPWM compression on audio"));
     options.addOption(Option("mute", "m", "Remove audio from output"));
@@ -572,6 +574,7 @@ int main(int argc, const char * argv[]) {
                     else if (arg == "custom") compression = VID32_FLAG_VIDEO_COMPRESSION_CUSTOM;
                 }
                 else if (option == "binary") binary = true;
+                else if (option == "nfpize") nfpize = true;
                 else if (option == "dfpwm") useDFPWM = true;
                 else if (option == "mute") mute = true;
                 else if (option == "width") width = std::stoi(arg);
@@ -877,6 +880,7 @@ int main(int argc, const char * argv[]) {
         dfpwm_codec_ctx->sample_fmt = AV_SAMPLE_FMT_U8;
         dfpwm_codec_ctx->sample_rate = 48000;
         dfpwm_codec_ctx->ch_layout = AV_CHANNEL_LAYOUT_MONO;
+        dfpwm_codec_ctx->frame_size = 24000;
         if ((error = avcodec_open2(dfpwm_codec_ctx, dfpwm_codec, NULL)) < 0) {
             std::cerr << "Could not open DFPWM codec: " << avErrorString(error) << "\n";
             if (sink_ctx) avfilter_free(sink_ctx);
@@ -1101,7 +1105,7 @@ int main(int argc, const char * argv[]) {
                             for (int line = 0; line < mh; line++) {
                                 memcpy(crop.vec.data() + line * mw, rs.vec.data() + (y + line) * width + x, mw * sizeof(uchar3));
                             }
-                            uchar *characters, *colors;
+                            uchar *characters = NULL, *colors;
                             std::vector<Vec3b> palette;
                             size_t w, h;
                             convertImage(crop, &characters, &colors, palette, w, h, nframe);
@@ -1135,13 +1139,13 @@ int main(int argc, const char * argv[]) {
                                 nframe_vid32++;
                             }
                             outstream.flush();
-                            delete[] characters;
+                            if (characters) delete[] characters;
                             delete[] colors;
                         }
                     }
                     // TODO: subtitles?
                 } else {
-                    uchar *characters, *colors;
+                    uchar *characters = NULL, *colors;
                     std::vector<Vec3b> palette;
                     size_t w, h;
                     convertImage(rs, &characters, &colors, palette, w, h, nframe);
@@ -1215,7 +1219,7 @@ int main(int argc, const char * argv[]) {
                     SDL_FreeSurface(surf);
                     SDL_UpdateWindowSurface(win);
 #endif
-                    delete[] characters;
+                    if (characters) delete[] characters;
                     delete[] colors;
                 }
                 if (streamed) {

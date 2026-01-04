@@ -366,6 +366,23 @@ __kernel void toCCPixel(__global const uchar * colors, __global uchar * characte
     }
 }
 
+__kernel void toNFPPixel(__global const uchar * colors, __global uchar * bg, ulong size) {
+    __private uchar color_counts[16] = {0};
+    __private uchar max_color = 0, max_count = 0;
+    __private uchar i, c;
+    if (get_global_id(0) * 6 >= size) return;
+    colors += get_global_id(0) * 6;
+    bg += get_global_id(0);
+    for (i = 0; i < 6; i++) {
+        c = colors[i];
+        if (++color_counts[c] > max_count) {
+            max_color = c;
+            max_count = color_counts[c];
+        }
+    }
+    *bg = max_color << 4;
+}
+
 __kernel void toLab(__global const uchar * image, __global uchar * output, ulong size) {
     __private float r, g, b, X, Y, Z, L, a, B;
     if (get_global_id(0) >= size) return;
