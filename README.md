@@ -42,6 +42,33 @@ mkShell {
 
 Nix support is maintained by [Tomodachi94](https://github.com/tomodachi94). For any issues with the Nix package itself, please contact him by opening an issue on [Nixpkgs](https://github.com/NixOS/nixpkgs/issues/new/choose).
 
+### Docker
+
+sanjuuni is available as a docker image. Just run the command according to the processing unit you want to use and append your sanjuuni arguments to it.
+If you want to access files out of your current folder (`..`), then you need to change the volume (`-v .:/srv/sanjuuni`)
+Images are currently only available for `x86_64`. If you need support for another architecture, then open an issue.
+
+#### CPU
+
+Run the following:
+
+```sh
+docker run --rm -v .:/srv/sanjuuni ghcr.io/mcjack123/sanjuuni:latest
+```
+
+#### GPU (OpenCL)
+
+This also works on WSL.
+If you need support for another GPU driver then open an issue.
+
+##### Nvidia
+
+Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) and use this as your run command:
+
+```sh
+docker run --rm -v .:/srv/sanjuuni --runtime=nvidia --gpus all ghcr.io/mcjack123/sanjuuni:nvidia-latest
+```
+
 ## Building
 Requirements:
 * C++17 or later compiler
