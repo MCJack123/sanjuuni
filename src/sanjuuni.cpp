@@ -1084,8 +1084,8 @@ int main(int argc, const char * argv[]) {
                         if (useDFPWM) header.flags |= VID32_FLAG_AUDIO_COMPRESSION_DFPWM;
                         if (monitorWidth) {
                             header.flags |= VID32_FLAG_VIDEO_MULTIMONITOR |
-                                VID32_FLAG_VIDEO_MULTIMONITOR_WIDTH(width / monitorWidth) |
-                                VID32_FLAG_VIDEO_MULTIMONITOR_HEIGHT(height / monitorHeight);
+                                VID32_FLAG_VIDEO_MULTIMONITOR_WIDTH(width / (trimBorders ? monitorArrayWidth * 128 / monitorScale / 3 : monitorWidth)) |
+                                VID32_FLAG_VIDEO_MULTIMONITOR_HEIGHT(height / (trimBorders ? monitorArrayHeight * 128 / monitorScale / 3 : monitorHeight));
                         }
                         outstream.write((char*)&header, 12);
                         outstream.write((char*)&combinedChunk, 9);
