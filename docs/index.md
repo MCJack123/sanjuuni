@@ -3,6 +3,8 @@ A fast and powerful image and video converter for ComputerCraft.
 
 ![screenshot](https://raw.githubusercontent.com/MCJack123/sanjuuni-ui/master/screenshot.png)
 
+**NEW: sanjuuni is now available [in the browser!](sanjuuni-ui.html)**
+
 sanjuuni allows you to convert images and videos into a format suitable for display in ComputerCraft. It automatically decodes files, creates an optimal palette for each image, dithers to smoothen edges, and packs pixels into CC's 2x3 "sixel" characters.
 
 sanjuuni supports output to the following formats:
