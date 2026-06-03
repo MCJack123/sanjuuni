@@ -18,7 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef OPENCV
+#ifndef OPENCL
 #include "sanjuuni.hpp"
 
 // OpenCL polyfills
@@ -51,6 +51,10 @@ inline uchar3 vload3(int n, const uchar * data) {return {data[n*3], data[n*3+1],
 inline float3 vload3(int n, const float * data) {return {data[n*3], data[n*3+1], data[n*3+2]};}
 inline void vstore3(uchar3 v, int n, uchar * data) {data[n*3] = v.x; data[n*3+1] = v.y; data[n*3+2] = v.z;}
 inline void vstore3(float3 v, int n, float * data) {data[n*3] = v.x; data[n*3+1] = v.y; data[n*3+2] = v.z;}
+#endif
+
+#ifdef SPIRV
+#define atomic_inc(n) (*n++) // SPIRV-Tools doesn't support OpenCL 1.1, and apparently atomic_inc wasn't included in 1.0
 #endif
 
 /* OpenCL-compatible C to be able to copy straight to OpenCL */
@@ -386,28 +390,28 @@ __kernel void toNFPPixel(__global const uchar * colors, __global uchar * bg, ulo
 __kernel void toLab(__global const uchar * image, __global uchar * output, ulong size) {
     __private float r, g, b, X, Y, Z, L, a, B;
     if (get_global_id(0) >= size) return;
-    r = image[get_global_id(0)*3] / 255.0; g = image[get_global_id(0)*3+1] / 255.0; b = image[get_global_id(0)*3+2] / 255.0;
-    if (r > 0.04045) r = pow((r + 0.055) / 1.055, 2.4);
-    else r = r / 12.92;
-    if (g > 0.04045) g = pow((g + 0.055) / 1.055, 2.4);
-    else g = g / 12.92;
-    if (b > 0.04045) b = pow((b + 0.055) / 1.055, 2.4);
-    else b = b / 12.92;
+    r = image[get_global_id(0)*3] / 255.0f; g = image[get_global_id(0)*3+1] / 255.0f; b = image[get_global_id(0)*3+2] / 255.0f;
+    if (r > 0.04045f) r = pow((r + 0.055f) / 1.055f, 2.4f);
+    else r = r / 12.92f;
+    if (g > 0.04045f) g = pow((g + 0.055f) / 1.055f, 2.4f);
+    else g = g / 12.92f;
+    if (b > 0.04045f) b = pow((b + 0.055f) / 1.055f, 2.4f);
+    else b = b / 12.92f;
     r = r * 100; g = g * 100; b = b * 100;
-    X = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 95.047;
-    Y = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 100.000;
-    Z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 108.883;
-    if (X > 0.008856) X = cbrt(X);
-    else X = (7.787 * X) + (16.0 / 116.0);
-    if (Y > 0.008856) Y = cbrt(Y);
-    else Y = (7.787 * Y) + (16.0 / 116.0);
-    if (Z > 0.008856) Z = cbrt(Z);
-    else Z = (7.787 * Z) + (16.0 / 116.0);
+    X = (r * 0.4124f + g * 0.3576f + b * 0.1805f) / 95.047f;
+    Y = (r * 0.2126f + g * 0.7152f + b * 0.0722f) / 100.000f;
+    Z = (r * 0.0193f + g * 0.1192f + b * 0.9505f) / 108.883f;
+    if (X > 0.008856f) X = cbrt(X);
+    else X = (7.787f * X) + (16.0f / 116.0f);
+    if (Y > 0.008856f) Y = cbrt(Y);
+    else Y = (7.787f * Y) + (16.0f / 116.0f);
+    if (Z > 0.008856f) Z = cbrt(Z);
+    else Z = (7.787f * Z) + (16.0f / 116.0f);
     L = (116 * Y) - 16; a = 500 * (X - Y) + 128; B = 200 * (Y - Z) + 128;
     output[get_global_id(0)*3] = L; output[get_global_id(0)*3+1] = a; output[get_global_id(0)*3+2] = B;
 }
 
-static float3 closestPixel(float3 pix, __constant uchar * palette, uchar palette_size, __global uchar * palette_index) {
+static float3 closestPixel(__private float3 pix, __constant uchar * palette, __private uchar palette_size) {
     __private uchar i;
     __private float3 closest, col;
     __private float dist;
@@ -422,14 +426,33 @@ static float3 closestPixel(float3 pix, __constant uchar * palette, uchar palette
             index = i;
         }
     }
-    if (palette_index != NULL) *palette_index = index;
+    //if (palette_index != NULL) *palette_index = index;
+    return closest;
+}
+
+static float3 closestPixelA(__private float3 pix, __constant uchar * palette, __private uchar palette_size, __global uchar * palette_index) {
+    __private uchar i;
+    __private float3 closest, col;
+    __private float dist;
+    __private uchar index = 0;
+    closest.x = palette[0]; closest.y = palette[1]; closest.z = palette[2];
+    dist = distance(pix, closest);
+    for (i = 1; i < palette_size; i++) {
+        col.x = palette[i*3]; col.y = palette[i*3+1]; col.z = palette[i*3+2];
+        if (distance(pix, col) < dist) {
+            closest = col;
+            dist = distance(pix, col);
+            index = i;
+        }
+    }
+    *palette_index = index;
     return closest;
 }
 
 __kernel void thresholdKernel(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size) {
     __private float3 pix, closest;
     pix.x = image[get_global_id(0)*3]; pix.y = image[get_global_id(0)*3+1]; pix.z = image[get_global_id(0)*3+2];
-    closest = closestPixel(pix, palette, palette_size, NULL);
+    closest = closestPixel(pix, palette, palette_size);
     output[get_global_id(0)*3] = closest.x; output[get_global_id(0)*3+1] = closest.y; output[get_global_id(0)*3+2] = closest.z;
 }
 
@@ -464,7 +487,7 @@ __kernel void floydSteinbergDither(
             if (id < height) {
                 pix.x = image[(yoff+x)*3]; pix.y = image[(yoff+x)*3+1]; pix.z = image[(yoff+x)*3+2];
                 pix += vload3(yoff + x, error);
-                closest = closestPixel(pix, palette, palette_size, NULL);
+                closest = closestPixel(pix, palette, palette_size);
                 output[(yoff+x)*3] = closest.x; output[(yoff+x)*3+1] = closest.y; output[(yoff+x)*3+2] = closest.z;
                 err = pix - closest;
                 if (x < width - 1) {
@@ -494,11 +517,11 @@ static __constant int thresholdMap[8][8] = {
     {63, 31, 55, 23, 61, 29, 53, 21}
 };
 
-__kernel void orderedDither(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size, ulong width, double factor) {
+__kernel void orderedDither(__global const uchar * image, __global uchar * output, __constant uchar * palette, uchar palette_size, ulong width, float factor) {
     __private float3 pix, closest;
     pix.x = image[get_global_id(0)*3]; pix.y = image[get_global_id(0)*3+1]; pix.z = image[get_global_id(0)*3+2];
-    pix += (float)factor * (thresholdMap[(get_global_id(0) / width) % 8][(get_global_id(0) % width) % 8] / 64.0f - 0.5f);
-    closest = closestPixel(pix, palette, palette_size, NULL);
+    pix += factor * (thresholdMap[(get_global_id(0) / width) % 8][(get_global_id(0) % width) % 8] / 64.0f - 0.5f);
+    closest = closestPixel(pix, palette, palette_size);
     output[get_global_id(0)*3] = closest.x; output[get_global_id(0)*3+1] = closest.y; output[get_global_id(0)*3+2] = closest.z;
 }
 
@@ -598,7 +621,7 @@ __kernel void averageKernel_B(__global uint * src, __global uchar * result, ulon
 __kernel void kMeans_bucket_kernel(__global const uchar * image, __global uchar * buckets, __constant uchar * palette, ulong palette_size) {
     __private float3 pix;
     pix.x = image[get_global_id(0)*3]; pix.y = image[get_global_id(0)*3+1]; pix.z = image[get_global_id(0)*3+2];
-    closestPixel(pix, palette, palette_size, buckets + get_global_id(0));
+    closestPixelA(pix, palette, palette_size, buckets + get_global_id(0));
 }
 
 __kernel void kMeans_recenter_kernel_A(__global const uchar * image, __global const uchar * buckets, __global uint * output, ulong length, __local uchar * buckets_aux) {

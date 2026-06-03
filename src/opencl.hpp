@@ -27,7 +27,6 @@
 #ifndef OPENCL_HPP
 #define OPENCL_HPP
 
-#define WORKGROUP_SIZE 64 // needs to be 64 to fully use AMD GPUs
 #define CL_HPP_TARGET_OPENCL_VERSION 120
 #define CL_HPP_MINIMUM_OPENCL_VERSION 100
 //#define PTX
@@ -40,6 +39,7 @@
 #include <string>
 #include <vector>
 #include <CL/opencl.hpp> // OpenCL 1.0, 1.1, 1.2
+#include "compute.hpp"
 
 typedef unsigned char uchar;
 typedef unsigned short ushort;
@@ -254,7 +254,7 @@ inline Device_Info select_device_with_id(const uint id, const std::vector<Device
     }
 }
 
-class Device {
+class Device: public ComputeDevice {
 private:
     cl::Context cl_context;
     cl::Program cl_program;
@@ -304,9 +304,12 @@ public:
     inline cl::Program get_cl_program() const { return cl_program; }
     inline cl::CommandQueue get_cl_queue() const { return cl_queue; }
     inline bool is_initialized() const { return exists; }
+    inline void enqueue_barrier_with_wait_list() {
+        get_cl_queue().enqueueBarrierWithWaitList();
+    }
 };
 
-template<typename T> class Memory {
+template<typename T> class Memory: public ComputeMemory<T> {
 private:
     ulong N = 0ull; // buffer length
     uint d = 1u; // buffer dimensions
@@ -552,18 +555,17 @@ public:
     inline void enqueue_write_to_device(const ulong offset, const ulong length) { write_to_device(offset, length, false); }
     inline void finish_queue() { cl_queue.finish(); }
     inline const cl::Buffer& get_cl_buffer() const { return device_buffer; }
+    inline void enqueue_copy_buffer(const ComputeMemory<T> * source, unsigned long source_offset, unsigned long dest_offset, unsigned long size) {
+        const Memory<T> * mem = dynamic_cast<const Memory<T>*>(source);
+        if (mem == NULL) throw OpenCLException("Source memory to copy must be OpenCL");
+        device->get_cl_queue()->enqueueCopyBuffer<uchar>(mem->get_cl_buffer(), get_cl_buffer(), source_offset, dest_offset, size);
+    }
+    template<typename T> inline void enqueue_fill_buffer_impl(const T& value, const ulong offset, const ulong size) {
+        device->get_cl_queue()->enqueueFillBuffer<T>(get_cl_buffer(), value, offset, size);
+    }
 };
 
-template<typename T>
-class LocalMemory {
-private:
-    ulong N = 0ll;
-public:
-    LocalMemory(ulong sz): N(sz) {}
-    ulong get_size() const {return N * sizeof(T);}
-};
-
-class Kernel {
+class Kernel: public ComputeKernel {
 private:
     ulong N = 0ull; // kernel range
     uint number_of_parameters = 0u;
@@ -576,7 +578,7 @@ private:
     template<typename T> inline void link_parameter(const uint position, const T& constant) {
         cl_kernel.setArg(position, sizeof(T), (void*)&constant);
     }
-    template<typename T> inline void link_parameter(const uint position, const LocalMemory<T>& memory) {
+    template<typename T> inline void link_parameter(const uint position, const ComputeLocalMemory<T>& memory) {
         cl_kernel.setArg(position, memory.get_size(), NULL);
     }
     inline void link_parameters(const uint starting_position) {
@@ -613,7 +615,7 @@ public:
     uint get_max_workgroup_size(const Device& device) {
         return cl_kernel.getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(device.info.cl_device);
     }
-    template<class... T> inline Kernel& add_parameters(const T&... parameters) { // add parameters to the list of existing parameters
+    template<class... T> inline Kernel& add_parameters_impl(const T&... parameters) { // add parameters to the list of existing parameters
         link_parameters(number_of_parameters, parameters...); // expand variadic template to link kernel parameters
         return *this;
     }

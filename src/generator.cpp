@@ -168,27 +168,26 @@ static void makeNFPCCImage_worker(void* s) {
     delete state;
 }
 
-void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols, OpenCL::Device * device) {
+void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols, ComputeDevice * device) {
     int width = input.width - input.width % 2, height = input.height - input.height % 3;
     uchar pal[48];
     for (int i = 0; i < palette.size() && i < 16; i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
-#ifdef HAS_OPENCL
     if (device != NULL) {
         *chars = new uchar[(height / 3) * (width / 2)];
         *cols = new uchar[(height / 3) * (width / 2)];
         input.upload();
         try {
-            OpenCL::Memory<uchar> colors_mem(*device, height * width / 6, 6, false, true);
-            OpenCL::Memory<uchar> chars_mem(*device, (height / 3) * (width / 2), 1, *chars);
-            OpenCL::Memory<uchar> cols_mem(*device, (height / 3) * (width / 2), 1, *cols);
-            OpenCL::Memory<uchar> palette_mem(*device, palette.size(), 3, pal);
-            OpenCL::Kernel copykernel(*device, height * width / 2, "copyColors", *input.mem, colors_mem, (ulong)width, (ulong)height);
-            OpenCL::Kernel kernel(*device, height * width / 6, "toCCPixel", colors_mem, chars_mem, cols_mem, palette_mem, (ulong)(width * height));
-            palette_mem.enqueue_write_to_device();
-            copykernel.enqueue_run();
-            kernel.enqueue_run();
-            chars_mem.enqueue_read_from_device();
-            cols_mem.enqueue_read_from_device();
+            std::unique_ptr<ComputeMemory<uchar>> colors_mem = device->create_memory<uchar>(height * width / 6, 6, false, true);
+            std::unique_ptr<ComputeMemory<uchar>> chars_mem = device->create_memory<uchar>((height / 3) * (width / 2), 1, *chars);
+            std::unique_ptr<ComputeMemory<uchar>> cols_mem = device->create_memory<uchar>((height / 3) * (width / 2), 1, *cols);
+            std::unique_ptr<ComputeMemory<uchar>> palette_mem = device->create_memory<uchar>(palette.size(), 3, pal);
+            std::unique_ptr<ComputeKernel> copykernel = device->create_kernel(height * width / 2, "copyColors", *input.mem, colors_mem, (ulong)width, (ulong)height);
+            std::unique_ptr<ComputeKernel> kernel = device->create_kernel(height * width / 6, "toCCPixel", colors_mem, chars_mem, cols_mem, palette_mem, (ulong)(width * height));
+            palette_mem->enqueue_write_to_device();
+            copykernel->enqueue_run();
+            kernel->enqueue_run();
+            chars_mem->enqueue_read_from_device();
+            cols_mem->enqueue_read_from_device();
             device->finish_queue();
         } catch (std::exception &e) {
             delete[] *chars;
@@ -198,7 +197,6 @@ void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars,
             throw e;
         }
     } else {
-#endif
         input.download();
         uchar * colors = new uchar[height * width];
         for (int y = 0; y < height; y++) {
@@ -222,25 +220,22 @@ void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars,
             work.push(makeCCImage_worker, new makeCCImage_state {&params, i});
         work.wait();
         delete[] colors;
-#ifdef HAS_OPENCL
     }
-#endif
 }
 
-void makeNFPCCImage(Mat1b& input, uchar** cols, OpenCL::Device * device) {
+void makeNFPCCImage(Mat1b& input, uchar** cols, ComputeDevice * device) {
     int width = input.width - input.width % 2, height = input.height - input.height % 3;
-#ifdef HAS_OPENCL
     if (device != NULL) {
         *cols = new uchar[(height / 3) * (width / 2)];
         input.upload();
         try {
-            OpenCL::Memory<uchar> colors_mem(*device, height * width / 6, 6, false, true);
-            OpenCL::Memory<uchar> cols_mem(*device, (height / 3) * (width / 2), 1, *cols);
-            OpenCL::Kernel copykernel(*device, height * width / 2, "copyColors", *input.mem, colors_mem, (ulong)width, (ulong)height);
-            OpenCL::Kernel kernel(*device, height * width / 6, "toNFPPixel", colors_mem, cols_mem, (ulong)(width * height));
-            copykernel.enqueue_run();
-            kernel.enqueue_run();
-            cols_mem.enqueue_read_from_device();
+            std::unique_ptr<ComputeMemory<uchar>> colors_mem = device->create_memory<uchar>(height * width / 6, 6, false, true);
+            std::unique_ptr<ComputeMemory<uchar>> cols_mem = device->create_memory<uchar>((height / 3) * (width / 2), 1, *cols);
+            std::unique_ptr<ComputeKernel> copykernel = device->create_kernel(height * width / 2, "copyColors", *input.mem, colors_mem, (ulong)width, (ulong)height);
+            std::unique_ptr<ComputeKernel> kernel = device->create_kernel(height * width / 6, "toNFPPixel", colors_mem, cols_mem, (ulong)(width * height));
+            copykernel->enqueue_run();
+            kernel->enqueue_run();
+            cols_mem->enqueue_read_from_device();
             device->finish_queue();
         } catch (std::exception &e) {
             delete[] *cols;
@@ -248,7 +243,6 @@ void makeNFPCCImage(Mat1b& input, uchar** cols, OpenCL::Device * device) {
             throw e;
         }
     } else {
-#endif
         input.download();
         uchar * colors = new uchar[height * width];
         for (int y = 0; y < height; y++) {
@@ -271,9 +265,7 @@ void makeNFPCCImage(Mat1b& input, uchar** cols, OpenCL::Device * device) {
             work.push(makeNFPCCImage_worker, new makeCCImage_state {&params, i});
         work.wait();
         delete[] colors;
-#ifdef HAS_OPENCL
     }
-#endif
 }
 
 std::string makeTable(const uchar * characters, const uchar * colors, const std::vector<Vec3b>& palette, int width, int height, bool compact, bool embedPalette, bool binary) {

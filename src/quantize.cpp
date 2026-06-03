@@ -34,17 +34,15 @@ extern void toLab(const uchar * image, uchar * output, ulong size);
 #define PARALLEL_BITONIC_C2_KERNEL "ParallelBitonic_C2"
 #define PARALLEL_BITONIC_C4_KERNEL "ParallelBitonic_C4"
 
-Mat makeLabImage(Mat& image, OpenCL::Device * device) {
+Mat makeLabImage(Mat& image, ComputeDevice * device) {
     Mat retval(image.width, image.height, device);
-#ifdef HAS_OPENCL
     if (device != NULL) {
         image.upload();
-        OpenCL::Kernel kernel(*device, image.width * image.height, "toLab", *image.mem, *retval.mem, (ulong)(image.width * image.height));
-        kernel.run();
+        std::unique_ptr<ComputeKernel> kernel = device->create_kernel(image.width * image.height, "toLab", *image.mem, *retval.mem, (ulong)(image.width * image.height));
+        kernel->run();
         retval.onHost = false;
         retval.onDevice = true;
     } else {
-#endif
         image.download();
         retval.onDevice = false;
         for (int y = 0; y < image.height; y++) {
@@ -52,9 +50,7 @@ Mat makeLabImage(Mat& image, OpenCL::Device * device) {
                 toLab((uchar*)(image.vec.data() + y * image.width + x), (uchar*)(retval.vec.data() + y * image.width + x), image.width * image.height);
             }
         }
-#ifdef HAS_OPENCL
     }
-#endif
     return retval;
 }
 
@@ -142,31 +138,30 @@ static void medianCut(std::vector<Vec3b>& pal, int num, int lastComponent, std::
     }
 }
 
-#ifdef HAS_OPENCL
 static void medianCutGPUQueue(
-    OpenCL::Device& device,
-    OpenCL::Memory<uchar>& buffer,
-    OpenCL::Memory<uchar>& components,
-    OpenCL::Memory<uchar>& result,
+    ComputeDevice * device,
+    std::unique_ptr<ComputeMemory<uchar>>& buffer,
+    std::unique_ptr<ComputeMemory<uchar>>& components,
+    std::unique_ptr<ComputeMemory<uchar>>& result,
     ulong length, ulong offset, uchar n, int numColors
 ) {
     ulong nparts = length / 128 + (length % 128 ? 1 : 0);
     if (n >= numColors) {
         // Average the buckets
-        OpenCL::Memory<uint> temp(device, nparts, 3, false, true);
-        OpenCL::Kernel avgA(device, nparts, "averageKernel_A", buffer, temp, offset, length);
-        OpenCL::Kernel avgB(device, 1, 1, "averageKernel_B", temp, result, (ulong)(n - numColors), length);
-        result.enqueue_read_from_device(); // VERY IMPORTANT LINE, IT BREAKS WITHOUT THIS
-        avgA.enqueue_run();
-        avgB.enqueue_run();
+        std::unique_ptr<ComputeMemory<uint>> temp = device->create_memory<uint>(nparts, 3, false, true);
+        std::unique_ptr<ComputeKernel> avgA = device->create_kernel(nparts, "averageKernel_A", buffer, temp, offset, length);
+        std::unique_ptr<ComputeKernel> avgB = device->create_kernel(1, 1, "averageKernel_B", temp, result, (ulong)(n - numColors), length);
+        result->enqueue_read_from_device(); // VERY IMPORTANT LINE, IT BREAKS WITHOUT THIS
+        avgA->enqueue_run();
+        avgB->enqueue_run();
         return;
     }
     // Find maximum range
-    OpenCL::Memory<uchar> intranges_mem(device, nparts, 6, false, true);
-    OpenCL::Kernel rangeA(device, nparts, "calculateRange_A", buffer, intranges_mem, length, offset);
-    OpenCL::Kernel rangeB(device, 1, 1, "calculateRange_B", intranges_mem, components, nparts, n);
-    rangeA.enqueue_run();
-    rangeB.enqueue_run();
+    std::unique_ptr<ComputeMemory<uchar>> intranges_mem = device->create_memory<uchar>(nparts, 6, false, true);
+    std::unique_ptr<ComputeKernel> rangeA = device->create_kernel(nparts, "calculateRange_A", buffer, intranges_mem, length, offset);
+    std::unique_ptr<ComputeKernel> rangeB = device->create_kernel(1, 1, "calculateRange_B", intranges_mem, components, nparts, n);
+    rangeA->enqueue_run();
+    rangeB->enqueue_run();
     // Sort entries
     // Adapted from http://www.bealto.com/gpu-sorting_parallel-bitonic-2.html
     for (size_t length_ = 1; length_ < length; length_ <<= 1) {
@@ -232,14 +227,14 @@ static void medianCutGPUQueue(
                 break;
             default: printf("Strategy error!\n"); break;
             }
-            OpenCL::Kernel kern(device, nThreads, kid, buffer, (int)inc, (int)(length_ << 1), components, n, offset);
-            int wg = kern.get_max_workgroup_size(device);
+            std::unique_ptr<ComputeKernel> kern = device->create_kernel(nThreads, kid, buffer, (int)inc, (int)(length_ << 1), components, n, offset);
+            int wg = kern->get_max_workgroup_size(device);
             wg = std::min(wg, 256);
             wg = std::min(wg, nThreads);
-            kern.set_ranges(nThreads, wg);
-            if (doLocal > 0) kern.add_parameters(OpenCL::LocalMemory<uchar>(doLocal * wg * 3));
-            kern.enqueue_run();
-            device.get_cl_queue().enqueueBarrierWithWaitList();
+            kern->set_ranges(nThreads, wg);
+            if (doLocal > 0) kern->add_parameters(ComputeLocalMemory<uchar>(doLocal * wg * 3));
+            kern->enqueue_run();
+            device->enqueue_barrier_with_wait_list();
             if (ninc < 0) break; // done
             inc >>= ninc;
         }
@@ -248,13 +243,11 @@ static void medianCutGPUQueue(
     medianCutGPUQueue(device, buffer, components, result, length / 2, offset, n << 1, numColors);
     medianCutGPUQueue(device, buffer, components, result, length / 2, offset + length / 2, (n << 1) | 1, numColors);
 }
-#endif
 
-std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::Device * device) {
+std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, ComputeDevice * device) {
     int e = 0;
     if (frexp(numColors, &e) > 0.5) throw std::invalid_argument("color count must be a power of 2");
     std::vector<Vec3b> newpal(numColors);
-#ifdef HAS_OPENCL
     if (device != NULL) {
         image.upload();
         size_t sz = image.width * image.height;
@@ -263,23 +256,21 @@ std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::De
             diffuse = true;
             sz = 1 << ((int)log2(sz) + 1);
         }
-        OpenCL::Memory<uchar> buffer(*device, sz, 3, false, true);
-        OpenCL::Memory<uchar> components(*device, numColors, 3, false, true);
-        OpenCL::Memory<uchar> pal(*device, numColors, 3);
-        device->get_cl_queue().enqueueFillBuffer<uchar>(components.get_cl_buffer(), 255, 0, 1);
-        device->get_cl_queue().enqueueCopyBuffer(image.mem->get_cl_buffer(), buffer.get_cl_buffer(), 0, 0, image.width * image.height * 3);
+        std::unique_ptr<ComputeMemory<uchar>> buffer = device->create_memory<uchar>(sz, 3, false, true);
+        std::unique_ptr<ComputeMemory<uchar>> components = device->create_memory<uchar>(numColors, 3, false, true);
+        std::unique_ptr<ComputeMemory<uchar>> pal = device->create_memory<uchar>(numColors, 3);
+        components->enqueue_fill_buffer<uchar>(255, 0, 1);
+        buffer->enqueue_copy_buffer((const ComputeMemory<uchar>*)image.mem.get(), 0, 0, image.width * image.height * 3);
         if (diffuse) {
             float step = (float)sz / (image.width * image.height);
-            OpenCL::Kernel copy(*device, sz - (image.width * image.height), "diffuseKernel", buffer, (ulong)(image.width * image.height), (ulong)sz, step);
-            copy.enqueue_run();
+            std::unique_ptr<ComputeKernel> copy = device->create_kernel(sz - (image.width * image.height), "diffuseKernel", buffer, (ulong)(image.width * image.height), (ulong)sz, step);
+            copy->enqueue_run();
         }
-        device->get_cl_queue().enqueueBarrierWithWaitList();
-        medianCutGPUQueue(*device, buffer, components, pal, sz, 0, 1, numColors);
-        pal.enqueue_read_from_device();
+        medianCutGPUQueue(device, buffer, components, pal, sz, 0, 1, numColors);
+        pal->enqueue_read_from_device();
         device->finish_queue();
-        for (int i = 0; i < numColors; i++) newpal[i] = {pal[i*3], pal[i*3+1], pal[i*3+2]};
+        for (int i = 0; i < numColors; i++) newpal[i] = {(*pal)[i*3], (*pal)[i*3+1], (*pal)[i*3+2]};
     } else {
-#endif
         image.download();
         std::vector<Vec3b> pal;
         for (int y = 0; y < image.height; y++)
@@ -290,9 +281,7 @@ std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::De
         if (numColors >= uniq.size()) return uniq;
         medianCut(pal, numColors, -1, newpal.begin());
         work.wait();
-#ifdef HAS_OPENCL
     }
-#endif
     // Move the darkest color to 15, and the lightest to 0
     // This fixes some background issues & makes subtitles a bit simpler
     std::vector<Vec3b>::iterator darkest = newpal.begin(), lightest = newpal.begin();
@@ -366,40 +355,38 @@ static void kMeans_recenter(void* s) {
     (*state->newColors)[state->i].second.clear();
 }
 
-std::vector<Vec3b> reducePalette_kMeans(Mat& image, int numColors, OpenCL::Device * device) {
+std::vector<Vec3b> reducePalette_kMeans(Mat& image, int numColors, ComputeDevice * device) {
     std::vector<Vec3b> newpal(numColors);
-#ifdef HAS_OPENCL
     if (device != NULL) {
         ulong nparts = (image.width * image.height) / 128 + ((image.width * image.height) % 128 ? 1 : 0);
         std::vector<Vec3b> basepal = reducePalette_medianCut(image, 16, device);
-        OpenCL::Memory<uchar> palette(*device, numColors, 3);
-        OpenCL::Memory<uchar> buckets(*device, image.width * image.height, 1, false, true);
-        OpenCL::Memory<uint> avgbuf(*device, nparts * numColors, 4, false, true);
-        OpenCL::Memory<uchar> changed(*device, 1, 1);
-        OpenCL::Kernel bucket(*device, image.width * image.height, "kMeans_bucket_kernel", *image.mem, buckets, palette, (ulong)numColors);
-        OpenCL::Kernel recenterA(*device, nparts * numColors, numColors, "kMeans_recenter_kernel_A", *image.mem, buckets, avgbuf, (ulong)(image.width * image.height), OpenCL::LocalMemory<uchar>(128));
-        OpenCL::Kernel recenterB(*device, numColors, numColors, "kMeans_recenter_kernel_B", avgbuf, palette, nparts, changed);
+        std::unique_ptr<ComputeMemory<uchar>> palette = device->create_memory<uchar>(numColors, 3);
+        std::unique_ptr<ComputeMemory<uchar>> buckets = device->create_memory<uchar>(image.width * image.height, 1, false, true);
+        std::unique_ptr<ComputeMemory<uint>> avgbuf = device->create_memory<uint>(nparts * numColors, 4, false, true);
+        std::unique_ptr<ComputeMemory<uchar>> changed = device->create_memory<uchar>(1, 1);
+        std::unique_ptr<ComputeKernel> bucket = device->create_kernel(image.width * image.height, "kMeans_bucket_kernel", *image.mem, buckets, palette, (ulong)numColors);
+        std::unique_ptr<ComputeKernel> recenterA = device->create_kernel(nparts * numColors, numColors, "kMeans_recenter_kernel_A", *image.mem, buckets, avgbuf, (ulong)(image.width * image.height), ComputeLocalMemory<uchar>(128));
+        std::unique_ptr<ComputeKernel> recenterB = device->create_kernel(numColors, numColors, "kMeans_recenter_kernel_B", avgbuf, palette, nparts, changed);
         image.upload();
         for (int i = 0; i < numColors; i++) {
-            palette[i*3] = basepal[i][0];
-            palette[i*3+1] = basepal[i][1];
-            palette[i*3+2] = basepal[i][2];
+            (*palette)[i*3] = basepal[i][0];
+            (*palette)[i*3+1] = basepal[i][1];
+            (*palette)[i*3+2] = basepal[i][2];
         }
-        palette.enqueue_write_to_device();
+        palette->enqueue_write_to_device();
         int loop = 0;
         do {
-            changed[0] = 0;
-            changed.enqueue_write_to_device();
-            bucket.enqueue_run();
-            recenterA.enqueue_run();
-            recenterB.enqueue_run();
-            changed.enqueue_read_from_device();
+            (*changed)[0] = 0;
+            changed->enqueue_write_to_device();
+            bucket->enqueue_run();
+            recenterA->enqueue_run();
+            recenterB->enqueue_run();
+            changed->enqueue_read_from_device();
             device->finish_queue();
-        } while (changed[0] && loop++ < 100);
-        palette.read_from_device();
-        for (int i = 0; i < numColors; i++) newpal[i] = {palette[i*3], palette[i*3+1], palette[i*3+2]};
+        } while ((*changed)[0] && loop++ < 100);
+        palette->read_from_device();
+        for (int i = 0; i < numColors; i++) newpal[i] = {(*palette)[i*3], (*palette)[i*3+1], (*palette)[i*3+2]};
     } else {
-#endif
         Vec3d * originalColors = new Vec3d[image.width * image.height];
         std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> colorsA, colorsB;
         std::vector<std::pair<Vec3d, std::vector<const Vec3d*>>> *colors = &colorsA, *newColors = &colorsB;
@@ -474,9 +461,7 @@ std::vector<Vec3b> reducePalette_kMeans(Mat& image, int numColors, OpenCL::Devic
             delete locks[i];
         }
         delete[] originalColors;
-#ifdef HAS_OPENCL
     }
-#endif
     // Move the darkest color to 15, and the lightest to 0
     // This fixes some background issues & makes subtitles a bit simpler
     std::vector<Vec3b>::iterator darkest = newpal.begin(), lightest = newpal.begin();
@@ -523,48 +508,43 @@ static void thresholdImage_worker(void* s) {
     delete state;
 }
 
-Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device) {
+Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, ComputeDevice * device) {
     Mat output(image.width, image.height, device);
-#ifdef HAS_OPENCL
     if (device != NULL) {
         uchar pal[48];
         for (int i = 0; i < palette.size(); i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
-        OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
-        palette_mem.write_to_device();
+        std::unique_ptr<ComputeMemory<uchar>> palette_mem = device->create_memory<uchar>(48, 1, pal);
+        palette_mem->write_to_device();
         image.upload();
-        OpenCL::Kernel kernel(*device, image.width * image.height, "thresholdKernel", *image.mem, *output.mem, palette_mem, (uchar)palette.size());
-        kernel.run();
+        std::unique_ptr<ComputeKernel> kernel = device->create_kernel(image.width * image.height, "thresholdKernel", *image.mem, *output.mem, palette_mem, (uchar)palette.size());
+        kernel->run();
         output.onHost = false;
         output.onDevice = true;
     } else {
-#endif
         image.download();
         output.onDevice = false;
         for (int i = 0; i < image.height; i++)
             work.push(thresholdImage_worker, new threshold_state {i, &image, &output, &palette});
         work.wait();
-#ifdef HAS_OPENCL
     }
-#endif
     return output;
 }
 
-Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device) {
+Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, ComputeDevice * device) {
     Mat retval(image.width, image.height, device);
-#ifdef HAS_OPENCL
     if (device != NULL && false) {
         ulong progress_size = image.height / WORKGROUP_SIZE + (image.height % WORKGROUP_SIZE ? 1 : 0);
-        OpenCL::Memory<uchar> palette_mem(*device, palette.size(), 3);
-        for (int i = 0; i < palette.size(); i++) {palette_mem[i*3] = palette[i][0]; palette_mem[i*3+1] = palette[i][1]; palette_mem[i*3+2] = palette[i][2];}
-        OpenCL::Memory<float> error(*device, image.width * (image.height + 1) * 3, 1, false, true);
-        OpenCL::Memory<uint> workgroup_rider(*device, 1, 1, false, true);
-        OpenCL::Memory<uint> workgroup_progress(*device, progress_size, 1, false, true);
-        OpenCL::LocalMemory<uint> progress(WORKGROUP_SIZE);
-        device->get_cl_queue().enqueueFillBuffer<float>(error.get_cl_buffer(), 0.0f, 0, image.width * (image.height + 1) * 3 * sizeof(float));
-        palette_mem.enqueue_write_to_device();
+        std::unique_ptr<ComputeMemory<uchar>> palette_mem = device->create_memory<uchar>(palette.size(), 3);
+        for (int i = 0; i < palette.size(); i++) {(*palette_mem)[i*3] = palette[i][0]; (*palette_mem)[i*3+1] = palette[i][1]; (*palette_mem)[i*3+2] = palette[i][2];}
+        std::unique_ptr<ComputeMemory<float>> error = device->create_memory<float>(image.width * (image.height + 1) * 3, 1, false, true);
+        std::unique_ptr<ComputeMemory<uint>> workgroup_rider = device->create_memory<uint>(1, 1, false, true);
+        std::unique_ptr<ComputeMemory<uint>> workgroup_progress = device->create_memory<uint>(progress_size, 1, false, true);
+        ComputeLocalMemory<uint> progress(WORKGROUP_SIZE);
+        error->enqueue_fill_buffer<float>(0.0f, 0, image.width * (image.height + 1) * 3 * sizeof(float));
+        palette_mem->enqueue_write_to_device();
         image.upload();
-        OpenCL::Kernel kernel(
-            *device, image.height, "floydSteinbergDither",
+        std::unique_ptr<ComputeKernel> kernel = device->create_kernel(
+            image.height, "floydSteinbergDither",
             *image.mem,
             *retval.mem,
             palette_mem,
@@ -574,11 +554,10 @@ Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * 
             workgroup_progress,
             progress,
             (ulong)image.width, (ulong)image.height);
-        kernel.run();
+        kernel->run();
         retval.onHost = false;
         retval.onDevice = true;
     } else {
-#endif
         image.download();
         retval.onDevice = false;
         std::vector<Vec3d> error(image.width);
@@ -598,9 +577,7 @@ Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * 
             }
             error = newerror;
         }
-#ifdef HAS_OPENCL
     }
-#endif
     return retval;
 }
 
@@ -620,26 +597,24 @@ static double colorDistance(const Vec3b& a, const Vec3b& b) {
     return sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
 }
 
-Mat ditherImage_ordered(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device) {
+Mat ditherImage_ordered(Mat& image, const std::vector<Vec3b>& palette, ComputeDevice * device) {
     Mat retval(image.width, image.height, device);
     double distance = 0;
     for (const Vec3b& a : palette)
         for (const Vec3b& b : palette)
             distance += colorDistance(a, b);
     distance /= palette.size() * palette.size() * 6;
-#ifdef HAS_OPENCL
     if (device != NULL) {
         uchar pal[48];
         for (int i = 0; i < palette.size(); i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
-        OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
-        palette_mem.write_to_device();
+        std::unique_ptr<ComputeMemory<uchar>> palette_mem = device->create_memory<uchar>(48, 1, pal);
+        palette_mem->write_to_device();
         image.upload();
-        OpenCL::Kernel kernel(*device, image.width * image.height, "orderedDither", *image.mem, *retval.mem, palette_mem, (uchar)palette.size(), (ulong)image.width, distance);
-        kernel.run();
+        std::unique_ptr<ComputeKernel> kernel = device->create_kernel(image.width * image.height, "orderedDither", *image.mem, *retval.mem, palette_mem, (uchar)palette.size(), (ulong)image.width, (float)distance);
+        kernel->run();
         retval.onHost = false;
         retval.onDevice = true;
     } else {
-#endif
         image.download();
         retval.onDevice = false;
         for (int y = 0; y < image.height; y++) {
@@ -649,34 +624,28 @@ Mat ditherImage_ordered(Mat& image, const std::vector<Vec3b>& palette, OpenCL::D
                 retval.at(y, x) = newpixel;
             }
         }
-#ifdef HAS_OPENCL
     }
-#endif
     return retval;
 }
 
-Mat1b rgbToPaletteImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device) {
+Mat1b rgbToPaletteImage(Mat& image, const std::vector<Vec3b>& palette, ComputeDevice * device) {
     Mat1b output(image.width, image.height, device);
-#ifdef HAS_OPENCL
     if (device != NULL) {
         uchar pal[48];
         for (int i = 0; i < palette.size(); i++) {pal[i*3] = palette[i][0]; pal[i*3+1] = palette[i][1]; pal[i*3+2] = palette[i][2];}
-        OpenCL::Memory<uchar> palette_mem(*device, 48, 1, pal);
-        palette_mem.write_to_device();
+        std::unique_ptr<ComputeMemory<uchar>> palette_mem = device->create_memory<uchar>(48, 1, pal);
+        palette_mem->write_to_device();
         image.upload();
-        OpenCL::Kernel kernel(*device, image.width * image.height, "rgbToPaletteKernel", *image.mem, *output.mem, palette_mem, (uchar)palette.size(), (ulong)(image.width * image.height));
-        kernel.run();
+        std::unique_ptr<ComputeKernel> kernel = device->create_kernel(image.width * image.height, "rgbToPaletteKernel", *image.mem, *output.mem, palette_mem, (uchar)palette.size(), (ulong)(image.width * image.height));
+        kernel->run();
         output.onHost = false;
         output.onDevice = true;
     } else {
-#endif
         image.download();
         output.onDevice = false;
         for (int y = 0; y < image.height; y++)
             for (int x = 0; x < image.width; x++)
                 output.at(y, x) = std::find(palette.begin(), palette.end(), Vec3b(image.at(y, x))) - palette.begin();
-#ifdef HAS_OPENCL
     }
-#endif
     return output;
 }

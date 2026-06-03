@@ -221,7 +221,7 @@ static void octree_free_node(struct octree_node* node) {
     free(node);
 }
 
-std::vector<Vec3b> reducePalette_octree(Mat& bmp, int numColors, OpenCL::Device * device) {
+std::vector<Vec3b> reducePalette_octree(Mat& bmp, int numColors, ComputeDevice * device) {
     int x, y;
     int i;
     int bpp;

@@ -30,13 +30,7 @@
 #include <atomic>
 #include <stdexcept>
 
-#ifdef HAS_OPENCL
-#include "opencl.hpp"
-#else
-namespace OpenCL {typedef struct Device Device;}
-typedef unsigned int uint;
-typedef unsigned long ulong;
-#endif
+#include "compute.hpp"
 
 /* Type definitions for ComputerCraft character-related code. */
 typedef uint8_t uchar;
@@ -85,7 +79,7 @@ public:
     unsigned height;
     std::vector<T> vec;
 #ifdef HAS_OPENCL
-    std::shared_ptr<OpenCL::Memory<T>> mem;
+    std::shared_ptr<ComputeMemory<T>> mem;
 #endif
     bool onHost = true, onDevice = false;
     class row {
@@ -116,9 +110,9 @@ public:
     };
     vector2d(): width(0), height(0), vec() {}
     vector2d(unsigned w, unsigned h, T v = T()): width(w), height(h), vec((size_t)w*h, v) {}
-    vector2d(unsigned w, unsigned h, OpenCL::Device * dev, T v = T()): width(w), height(h), vec((size_t)w*h, v) {
+    vector2d(unsigned w, unsigned h, ComputeDevice * dev, T v = T()): width(w), height(h), vec((size_t)w*h, v) {
 #ifdef HAS_OPENCL
-        if (dev != NULL) mem = std::make_shared<OpenCL::Memory<T>>(*dev, w * h, 1, vec.data());
+        if (dev != NULL) mem = std::make_shared<ComputeMemory<T>>(*dev, w * h, 1, vec.data());
 #endif
     }
     row operator[](unsigned idx) {
@@ -323,7 +317,7 @@ extern void toNFPPixel(const uchar * colors, uchar * color, ulong size = 1);
  * @param numColors The number of colors to get
  * @return An optimized palette for the image
  */
-extern std::vector<Vec3b> reducePalette_octree(Mat& bmp, int numColors, OpenCL::Device * device = NULL);
+extern std::vector<Vec3b> reducePalette_octree(Mat& bmp, int numColors, ComputeDevice * device = NULL);
 
 /* quantize */
 /**
@@ -331,7 +325,7 @@ extern std::vector<Vec3b> reducePalette_octree(Mat& bmp, int numColors, OpenCL::
  * @param image The image to convert
  * @return A new image with all pixels in Lab color space
  */
-extern Mat makeLabImage(Mat& image, OpenCL::Device * device = NULL);
+extern Mat makeLabImage(Mat& image, ComputeDevice * device = NULL);
 /**
  * Converts a single RGB color into a CIELAB color.
  * @param color The color to convert
@@ -358,21 +352,21 @@ extern Vec3b nearestColor(const std::vector<Vec3b>& palette, const Vec3d& color,
  * @param numColors The number of colors to get (must be a power of 2)
  * @return An optimized palette for the image
  */
-extern std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, OpenCL::Device * device = NULL);
+extern std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, ComputeDevice * device = NULL);
 /**
  * Generates an optimized palette for an image using the k-means algorithm.
  * @param image The image to generate a palette for
  * @param numColors The number of colors to get
  * @return An optimized palette for the image
  */
-extern std::vector<Vec3b> reducePalette_kMeans(Mat& image, int numColors, OpenCL::Device * device = NULL);
+extern std::vector<Vec3b> reducePalette_kMeans(Mat& image, int numColors, ComputeDevice * device = NULL);
 /**
  * Reduces the colors in an image using the specified palette through thresholding.
  * @param image The image to reduce
  * @param palette The palette to use
  * @return A reduced-color version of the image using the palette
  */
-extern Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device = NULL);
+extern Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, ComputeDevice * device = NULL);
 /**
  * Reduces the colors in an image using the specified palette through Floyd-
  * Steinberg dithering.
@@ -380,7 +374,7 @@ extern Mat thresholdImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL:
  * @param palette The palette to use
  * @return A reduced-color version of the image using the palette
  */
-extern Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device = NULL);
+extern Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, ComputeDevice * device = NULL);
 /**
  * Reduces the colors in an image using the specified palette through ordered
  * dithering.
@@ -388,7 +382,7 @@ extern Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::De
  * @param palette The palette to use
  * @return A reduced-color version of the image using the palette
  */
-extern Mat ditherImage_ordered(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device = NULL);
+extern Mat ditherImage_ordered(Mat& image, const std::vector<Vec3b>& palette, ComputeDevice * device = NULL);
 /**
  * Converts an RGB image into an indexed image using the specified palette. The
  * image must have been reduced before using this function.
@@ -396,7 +390,7 @@ extern Mat ditherImage_ordered(Mat& image, const std::vector<Vec3b>& palette, Op
  * @param palette The palette for the image
  * @return An indexed version of the image
  */
-extern Mat1b rgbToPaletteImage(Mat& image, const std::vector<Vec3b>& palette, OpenCL::Device * device = NULL);
+extern Mat1b rgbToPaletteImage(Mat& image, const std::vector<Vec3b>& palette, ComputeDevice * device = NULL);
 
 /* generator */
 /**
@@ -408,7 +402,7 @@ extern Mat1b rgbToPaletteImage(Mat& image, const std::vector<Vec3b>& palette, Op
  * @param cols A pointer to the destination color pair array pointer - this must
  * be freed with `delete[]` once finished
  */
-extern void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols, OpenCL::Device * device = NULL);
+extern void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar** chars, uchar** cols, ComputeDevice * device = NULL);
 /**
  * Converts an indexed image into a character-based format suitable for CC. This
  * uses an "NFP" algorithm which only generates background colors, reducing
@@ -417,7 +411,7 @@ extern void makeCCImage(Mat1b& input, const std::vector<Vec3b>& palette, uchar**
  * @param cols A pointer to the destination color pair array pointer - this must
  * be freed with `delete[]` once finished
  */
-extern void makeNFPCCImage(Mat1b& input, uchar** cols, OpenCL::Device * device = NULL);
+extern void makeNFPCCImage(Mat1b& input, uchar** cols, ComputeDevice * device = NULL);
 /**
  * Generates a blit table from the specified CC image.
  * @param characters The character array to use

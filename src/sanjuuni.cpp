@@ -985,7 +985,7 @@ int main(int argc, const char * argv[]) {
     }
 #endif
 
-#ifdef HAS_OPENCL
+    // TODO: add backend switching
     if (!disableOpenCL) {
         try {
             device = new OpenCL::Device(OpenCL::select_device_with_most_flops());
@@ -1019,7 +1019,6 @@ int main(int argc, const char * argv[]) {
             device = NULL;
         }
     }
-#endif
 
 #ifdef USE_SDL
     SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
