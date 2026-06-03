@@ -228,7 +228,7 @@ static void medianCutGPUQueue(
             default: printf("Strategy error!\n"); break;
             }
             std::unique_ptr<ComputeKernel> kern = device->create_kernel(nThreads, kid, buffer, (int)inc, (int)(length_ << 1), components, n, offset);
-            int wg = kern->get_max_workgroup_size(device);
+            int wg = kern->get_max_workgroup_size();
             wg = std::min(wg, 256);
             wg = std::min(wg, nThreads);
             kern->set_ranges(nThreads, wg);
@@ -259,7 +259,7 @@ std::vector<Vec3b> reducePalette_medianCut(Mat& image, int numColors, ComputeDev
         std::unique_ptr<ComputeMemory<uchar>> buffer = device->create_memory<uchar>(sz, 3, false, true);
         std::unique_ptr<ComputeMemory<uchar>> components = device->create_memory<uchar>(numColors, 3, false, true);
         std::unique_ptr<ComputeMemory<uchar>> pal = device->create_memory<uchar>(numColors, 3);
-        components->enqueue_fill_buffer<uchar>(255, 0, 1);
+        components->enqueue_fill_buffer(255, 0, 1);
         buffer->enqueue_copy_buffer((const ComputeMemory<uchar>*)image.mem.get(), 0, 0, image.width * image.height * 3);
         if (diffuse) {
             float step = (float)sz / (image.width * image.height);
@@ -540,7 +540,7 @@ Mat ditherImage(Mat& image, const std::vector<Vec3b>& palette, ComputeDevice * d
         std::unique_ptr<ComputeMemory<uint>> workgroup_rider = device->create_memory<uint>(1, 1, false, true);
         std::unique_ptr<ComputeMemory<uint>> workgroup_progress = device->create_memory<uint>(progress_size, 1, false, true);
         ComputeLocalMemory<uint> progress(WORKGROUP_SIZE);
-        error->enqueue_fill_buffer<float>(0.0f, 0, image.width * (image.height + 1) * 3 * sizeof(float));
+        error->enqueue_fill_buffer(0.0f, 0, image.width * (image.height + 1) * 3 * sizeof(float));
         palette_mem->enqueue_write_to_device();
         image.upload();
         std::unique_ptr<ComputeKernel> kernel = device->create_kernel(

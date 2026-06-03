@@ -31,8 +31,7 @@ class ComputeMemory {
 protected:
     inline ComputeMemory() {}
 public:
-    virtual ~ComputeMemory() = 0;
-    virtual ComputeMemory& operator=(ComputeMemory&& memory) noexcept = 0;
+    //virtual ComputeMemory& operator=(ComputeMemory&& memory) noexcept = 0;
     virtual const unsigned long length() const = 0;
     virtual const unsigned int dimensions() const = 0;
     virtual const unsigned long range() const = 0;
@@ -41,6 +40,7 @@ public:
     virtual void write_to_device(const bool blocking=true) = 0;
     virtual void enqueue_read_from_device() = 0;
     virtual void enqueue_write_to_device() = 0;
+    virtual void enqueue_fill_buffer(const T& value, const unsigned long offset, const unsigned long size);
     virtual void enqueue_copy_buffer(const ComputeMemory<T> * source, unsigned long source_offset, unsigned long dest_offset, unsigned long size) = 0;
     virtual void finish_queue() = 0;
     virtual void reset(const T value=(T)0) = 0;
@@ -48,9 +48,6 @@ public:
     virtual const T* const data() const = 0;
     virtual T& operator[](const unsigned long i) = 0;
     virtual const T& operator[](const unsigned long i) const = 0;
-
-    template<typename T>
-    void enqueue_fill_buffer(const T& value, const unsigned long offset, const unsigned long size);
 };
 
 template<typename T>
@@ -69,7 +66,7 @@ public:
     virtual ComputeKernel& set_ranges(const unsigned long N, const unsigned long workgroup_size=(unsigned long)WORKGROUP_SIZE) = 0;
     virtual const ulong range() const = 0;
     virtual unsigned int get_number_of_parameters() const = 0;
-    virtual unsigned int get_max_workgroup_size(const ComputeDevice * device) = 0;
+    virtual unsigned int get_max_workgroup_size() = 0;
     virtual ComputeKernel& enqueue_run(const unsigned int t=1u, const unsigned int o=0u) = 0;
     virtual ComputeKernel& finish_queue() = 0;
     virtual ComputeKernel& run(const unsigned int t=1u) = 0;
@@ -80,7 +77,6 @@ class ComputeDevice {
 protected:
     inline ComputeDevice() {}
 public:
-    virtual ~ComputeDevice() = 0;
     virtual void finish_queue() = 0;
     virtual bool is_initialized() const = 0;
     virtual void enqueue_barrier_with_wait_list() = 0;
@@ -105,17 +101,17 @@ public:
 #define TRY_TYPE(typ, code) { typ * this_cast = dynamic_cast<typ*>(this); if (this_cast != nullptr) code }
 
 template<typename T>
-std::unique_ptr<ComputeMemory<T>> ComputeDevice::create_memory(const unsigned long N, const unsigned int dimensions=1u, const bool allocate_host=true, const bool allocate_device=true, const T value=(T)0) {
+std::unique_ptr<ComputeMemory<T>> ComputeDevice::create_memory(const unsigned long N, const unsigned int dimensions, const bool allocate_host, const bool allocate_device, const T value) {
 #ifdef HAS_OPENCL
-    TRY_TYPE(OpenCL::Device, return OpenCL::Memory<T>(*this_cast, N, dimensions, allocate_host, allocate_device, value);)
+    TRY_TYPE(OpenCL::Device, return std::make_unique<OpenCL::Memory<T>>(*this_cast, N, dimensions, allocate_host, allocate_device, value);)
 #endif
     return nullptr;
 }
 
 template<typename T>
-std::unique_ptr<ComputeMemory<T>> ComputeDevice::create_memory(const unsigned long N, const unsigned int dimensions, T* const host_buffer, const bool allocate_device=true) {
+std::unique_ptr<ComputeMemory<T>> ComputeDevice::create_memory(const unsigned long N, const unsigned int dimensions, T* const host_buffer, const bool allocate_device) {
 #ifdef HAS_OPENCL
-    TRY_TYPE(OpenCL::Device, return OpenCL::Memory<T>(*this_cast, N, dimensions, host_buffer, allocate_device);)
+    TRY_TYPE(OpenCL::Device, return std::make_unique<OpenCL::Memory<T>>(*this_cast, N, dimensions, host_buffer, allocate_device);)
 #endif
     return nullptr;
 }
@@ -123,7 +119,7 @@ std::unique_ptr<ComputeMemory<T>> ComputeDevice::create_memory(const unsigned lo
 template<class... T>
 std::unique_ptr<ComputeKernel> ComputeDevice::create_kernel(const ulong N, const std::string& name, const T&... parameters) {
 #ifdef HAS_OPENCL
-    TRY_TYPE(OpenCL::Device, return OpenCL::Kernel(*this_cast, N, name, parameters...);)
+    TRY_TYPE(OpenCL::Device, return std::make_unique<OpenCL::Kernel>(*this_cast, N, name, parameters...);)
 #endif
     return nullptr;
 }
@@ -131,22 +127,15 @@ std::unique_ptr<ComputeKernel> ComputeDevice::create_kernel(const ulong N, const
 template<class... T>
 std::unique_ptr<ComputeKernel> ComputeDevice::create_kernel(const ulong N, const uint workgroup_size, const std::string& name, const T&... parameters) {
 #ifdef HAS_OPENCL
-    TRY_TYPE(OpenCL::Device, return OpenCL::Kernel(*this_cast, N, workgroup_size, name, parameters...);)
+    TRY_TYPE(OpenCL::Device, return std::make_unique<OpenCL::Kernel>(*this_cast, N, workgroup_size, name, parameters...);)
 #endif
     return nullptr;
 }
 
-template<typename T>
-void ComputeMemory<T>::enqueue_fill_buffer(const T& value, const unsigned long offset, const unsigned long size) {
-#ifdef HAS_OPENCL
-    TRY_TYPE(OpenCL::Device, this_cast->enqueue_fill_buffer_impl<T>(value, offset, size))
-#endif
-}
-
 template<class... T>
-ComputeKernel& add_parameters(const T&... parameters) {
+ComputeKernel& ComputeKernel::add_parameters(const T&... parameters) {
 #ifdef HAS_OPENCL
-    TRY_TYPE(OpenCL::Kernel, this_cast->add_parameters_impl(parameters...))
+    TRY_TYPE(OpenCL::Kernel, this_cast->add_parameters_impl(parameters...);)
 #endif
     return *this;
 }

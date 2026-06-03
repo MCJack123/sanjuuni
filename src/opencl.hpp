@@ -440,25 +440,25 @@ public:
         if(host_buffer_exists) for(ulong i=0ull; i<N*(ulong)d; i++) host_buffer[i] = value;
         write_to_device();
     }
-    inline const ulong length() const { return N; }
-    inline const uint dimensions() const { return d; }
-    inline const ulong range() const { return N*(ulong)d; }
-    inline const ulong capacity() const { return N*(ulong)d*sizeof(T); } // returns capacity of the buffer in Byte
-    inline T* const data() { return host_buffer; }
-    inline const T* const data() const { return host_buffer; }
+    inline virtual const unsigned long length() const override { return N; }
+    inline virtual const unsigned int dimensions() const override { return d; }
+    inline virtual const unsigned long range() const override { return N*(ulong)d; }
+    inline virtual const unsigned long capacity() const override { return N*(ulong)d*sizeof(T); } // returns capacity of the buffer in Byte
+    inline virtual T* const data() override { return host_buffer; }
+    inline virtual const T* const data() const override { return host_buffer; }
     inline T* const operator()() { return host_buffer; }
     inline const T* const operator()() const { return host_buffer; }
-    inline T& operator[](const ulong i) { return host_buffer[i]; }
-    inline const T& operator[](const ulong i) const { return host_buffer[i]; }
+    inline virtual T& operator[](const unsigned long i) override { return host_buffer[i]; }
+    inline virtual const T& operator[](const unsigned long i) const override { return host_buffer[i]; }
     inline const T operator()(const ulong i) const { return host_buffer[i]; }
     inline const T operator()(const ulong i, const uint dimension) const { return host_buffer[i+(ulong)dimension*N]; } // array of structures
-    inline void read_from_device(const bool blocking=true) {
+    inline virtual void read_from_device(const bool blocking=true) override {
         if(host_buffer_exists&&device_buffer_exists) {
             int res = cl_queue.enqueueReadBuffer(device_buffer, blocking, 0u, capacity(), (void*)host_buffer);
             if (res != CL_SUCCESS) throw OpenCLException(std::to_string(res));
         }
     }
-    inline void write_to_device(const bool blocking=true) {
+    inline virtual void write_to_device(const bool blocking=true) override {
         if(host_buffer_exists&&device_buffer_exists) cl_queue.enqueueWriteBuffer(device_buffer, blocking, 0u, capacity(), (void*)host_buffer);
     }
     inline void read_from_device(const ulong offset, const ulong length, const bool blocking=true) {
@@ -549,19 +549,19 @@ public:
             if(blocking) cl_queue.finish();
         }
     }
-    inline void enqueue_read_from_device() { read_from_device(false); }
-    inline void enqueue_write_to_device() { write_to_device(false); }
+    inline virtual void enqueue_read_from_device() override { read_from_device(false); }
+    inline virtual void enqueue_write_to_device() override { write_to_device(false); }
     inline void enqueue_read_from_device(const ulong offset, const ulong length) { read_from_device(offset, length, false); }
     inline void enqueue_write_to_device(const ulong offset, const ulong length) { write_to_device(offset, length, false); }
-    inline void finish_queue() { cl_queue.finish(); }
+    inline virtual void finish_queue() override { cl_queue.finish(); }
     inline const cl::Buffer& get_cl_buffer() const { return device_buffer; }
-    inline void enqueue_copy_buffer(const ComputeMemory<T> * source, unsigned long source_offset, unsigned long dest_offset, unsigned long size) {
+    inline virtual void enqueue_copy_buffer(const ComputeMemory<T> * source, unsigned long source_offset, unsigned long dest_offset, unsigned long size) override {
         const Memory<T> * mem = dynamic_cast<const Memory<T>*>(source);
         if (mem == NULL) throw OpenCLException("Source memory to copy must be OpenCL");
-        device->get_cl_queue()->enqueueCopyBuffer<uchar>(mem->get_cl_buffer(), get_cl_buffer(), source_offset, dest_offset, size);
+        device->get_cl_queue().enqueueCopyBuffer(mem->get_cl_buffer(), get_cl_buffer(), source_offset, dest_offset, size);
     }
-    template<typename T> inline void enqueue_fill_buffer_impl(const T& value, const ulong offset, const ulong size) {
-        device->get_cl_queue()->enqueueFillBuffer<T>(get_cl_buffer(), value, offset, size);
+    inline virtual void enqueue_fill_buffer(const T& value, const unsigned long offset, const unsigned long size) override {
+        device->get_cl_queue().enqueueFillBuffer<T>(get_cl_buffer(), value, offset, size);
     }
 };
 
@@ -572,8 +572,19 @@ private:
     cl::Kernel cl_kernel;
     cl::NDRange cl_range_global, cl_range_local;
     cl::CommandQueue cl_queue;
+    const Device& device;
     template<typename T> inline void link_parameter(const uint position, const Memory<T>& memory) {
         cl_kernel.setArg(position, memory.get_cl_buffer());
+    }
+    template<typename T> inline void link_parameter(const uint position, const ComputeMemory<T> * memory) {
+        const Memory<T> * mem = dynamic_cast<const Memory<T>*>(memory);
+        if (mem == NULL) throw OpenCLException("Memory parameter must be OpenCL");
+        cl_kernel.setArg(position, mem->get_cl_buffer());
+    }
+    template<typename T> inline void link_parameter(const uint position, const std::unique_ptr<ComputeMemory<T>>& memory) {
+        const Memory<T> * mem = dynamic_cast<const Memory<T>*>(memory.get());
+        if (mem == NULL) throw OpenCLException("Memory parameter must be OpenCL");
+        cl_kernel.setArg(position, mem->get_cl_buffer());
     }
     template<typename T> inline void link_parameter(const uint position, const T& constant) {
         cl_kernel.setArg(position, sizeof(T), (void*)&constant);
@@ -589,21 +600,20 @@ private:
         link_parameters(starting_position+1u, parameters...);
     }
 public:
-    template<class... T> inline Kernel(const Device& device, const ulong N, const std::string& name, const T&... parameters) { // accepts Memory<T> objects and fundamental data type constants
+    template<class... T> inline Kernel(const Device& device, const ulong N, const std::string& name, const T&... parameters): device(device) { // accepts Memory<T> objects and fundamental data type constants
         if(!device.is_initialized()) print_error("No Device selected. Call Device constructor.");
         cl_kernel = cl::Kernel(device.get_cl_program(), name.c_str());
         link_parameters(number_of_parameters, parameters...); // expand variadic template to link kernel parameters
         set_ranges(N);
         cl_queue = device.get_cl_queue();
     }
-    template<class... T> inline Kernel(const Device& device, const ulong N, const uint workgroup_size, const std::string& name, const T&... parameters) { // accepts Memory<T> objects and fundamental data type constants
+    template<class... T> inline Kernel(const Device& device, const ulong N, const uint workgroup_size, const std::string& name, const T&... parameters): device(device) { // accepts Memory<T> objects and fundamental data type constants
         if(!device.is_initialized()) print_error("No Device selected. Call Device constructor.");
         cl_kernel = cl::Kernel(device.get_cl_program(), name.c_str());
         link_parameters(number_of_parameters, parameters...); // expand variadic template to link kernel parameters
         set_ranges(N, (ulong)workgroup_size);
         cl_queue = device.get_cl_queue();
     }
-    inline Kernel() {} // default constructor
     inline Kernel& set_ranges(const ulong N, const ulong workgroup_size=(ulong)WORKGROUP_SIZE) {
         this->N = N;
         cl_range_global = cl::NDRange(((N+workgroup_size-1ull)/workgroup_size)*workgroup_size); // make global range a multiple of local range
@@ -612,7 +622,7 @@ public:
     }
     inline const ulong range() const { return N; }
     inline uint get_number_of_parameters() const { return number_of_parameters; }
-    uint get_max_workgroup_size(const Device& device) {
+    uint get_max_workgroup_size() {
         return cl_kernel.getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(device.info.cl_device);
     }
     template<class... T> inline Kernel& add_parameters_impl(const T&... parameters) { // add parameters to the list of existing parameters

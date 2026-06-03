@@ -78,9 +78,7 @@ public:
     unsigned width;
     unsigned height;
     std::vector<T> vec;
-#ifdef HAS_OPENCL
-    std::shared_ptr<ComputeMemory<T>> mem;
-#endif
+    std::shared_ptr<std::unique_ptr<ComputeMemory<T>>> mem;
     bool onHost = true, onDevice = false;
     class row {
         std::vector<T> * vec;
@@ -111,9 +109,7 @@ public:
     vector2d(): width(0), height(0), vec() {}
     vector2d(unsigned w, unsigned h, T v = T()): width(w), height(h), vec((size_t)w*h, v) {}
     vector2d(unsigned w, unsigned h, ComputeDevice * dev, T v = T()): width(w), height(h), vec((size_t)w*h, v) {
-#ifdef HAS_OPENCL
-        if (dev != NULL) mem = std::make_shared<ComputeMemory<T>>(*dev, w * h, 1, vec.data());
-#endif
+        if (dev != NULL) mem = std::make_shared<std::unique_ptr<ComputeMemory<T>>>(dev->create_memory<T>(w * h, 1, vec.data()));
     }
     row operator[](unsigned idx) {
         if (idx >= height) throw std::out_of_range("Vector2D index out of range");
@@ -133,15 +129,11 @@ public:
     }
     void remove_last_line() {vec.resize(width*--height);}
     void download() {
-#ifdef HAS_OPENCL
-        if (mem != NULL && !onHost && onDevice) mem->read_from_device();
-#endif
+        if (mem != NULL && !onHost && onDevice) (*mem)->read_from_device();
         onHost = true;
     }
     void upload() {
-#ifdef HAS_OPENCL
-        if (mem != NULL && !onDevice && onHost) mem->write_to_device();
-#endif
+        if (mem != NULL && !onDevice && onHost) (*mem)->write_to_device();
         onDevice = true;
     }
 };
