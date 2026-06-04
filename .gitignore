@@ -19,3 +19,6 @@ un*.lua
 src/cc-pixel-cl.cpp
 tools/32vid-player
 tools/32vid-streamer
+*.glsl
+*.spv
+*.wgsl

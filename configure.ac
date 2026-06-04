@@ -7,6 +7,7 @@ AC_LANG([C++])
 CXXFLAGS="$CXXFLAGS -std=c++17"
 AC_PROG_CC
 AC_PROG_CXX
+AC_PROG_CPP
 AX_CHECK_COMPILE_FLAG([-std=c++17], [], [AC_MSG_ERROR([C++ compiler does not support -std=c++17.])])
 
 AC_CHECK_HEADERS([libavformat/avformat.h], [], [AC_MSG_ERROR([Could not find libavformat headers.])])

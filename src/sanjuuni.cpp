@@ -1066,7 +1066,7 @@ int main(int argc, const char * argv[]) {
                         monitorWidth = 0;
                         monitorHeight = 0;
                     } else if (monitorWidth && mode == OutputType::Lua) {
-                        outstream << "local width,height=" << ceil((double)width / (double)monitorWidth) << "," << ceil((double)height / (double)monitorHeight) << ";" << multiMonitorLua;
+                        outstream << "local width,height=" << ceil((double)width / (double)(trimBorders ? monitorArrayWidth * 128 / monitorScale / 3 : monitorWidth)) << "," << ceil((double)height / (double)(trimBorders ? monitorArrayHeight * 128 / monitorScale / 3 : monitorHeight)) << ";" << multiMonitorLua;
                     }
                     resize_ctx = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format, width, height, AV_PIX_FMT_BGR24, SWS_BICUBIC, NULL, NULL, NULL);
                     if (mode == OutputType::Vid32 && !separateStreams) {

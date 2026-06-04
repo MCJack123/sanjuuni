@@ -292,7 +292,7 @@ extern WorkQueue work;
  * @param palette A 16-long array of colors in the palette
  * @param size Reserved for OpenCL
  */
-extern void toCCPixel(const uchar * colors, uchar * character, uchar * color, const uchar * palette, ulong size = 1);
+extern void toCCPixel(uchar * colors, uchar * character, uchar * color, uchar * palette, ulong size = 1);
 
 /**
  * Converts a 2x3 array of colors into low-resolution background colors using the specified palette.
@@ -300,7 +300,7 @@ extern void toCCPixel(const uchar * colors, uchar * character, uchar * color, co
  * @param color A pointer to the resulting color (will be shifted up by 4)
  * @param size Reserved for OpenCL
  */
-extern void toNFPPixel(const uchar * colors, uchar * color, ulong size = 1);
+extern void toNFPPixel(uchar * colors, uchar * color, ulong size = 1);
 
 /* octree */
 /**

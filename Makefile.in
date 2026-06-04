@@ -1,4 +1,5 @@
 CXX=@CXX@
+CPP=@CPP@
 CPPFLAGS=@CPPFLAGS@
 CXXFLAGS=@CFLAGS@ @CXXFLAGS@
 LDFLAGS=@LDFLAGS@
@@ -28,7 +29,7 @@ $(TDIR)/32vid-streamer: $(TDIR)/32vid-streamer.cpp $(OBJ)
 
 $(SDIR)/cc-pixel-cl.cpp: $(SDIR)/cc-pixel.cpp
 	printf '// Generated automatically; do not edit!\n#include <string>\nnamespace OpenCL {std::string get_opencl_c_code() { return ' > $@
-	$(SED) -n -e '/#ifndef OPENCL/{:a; N; /#endif/!ba; d};  s/\\/\\\\/g; s/"/\\"/g; s/^/"/g; s/$$/\\n"/g; p' $< >> $@
+	$(CPP) -P -DOPENCL $^ | $(SED) -n -e 's/\\/\\\\/g; s/"/\\"/g; s/^/"/g; s/$$/\\n"/g; p' $< >> $@
 	echo ';}}' >> $@
 
 $(ODIR)/%.o: $(SDIR)/%.cpp $(SDIR)/sanjuuni.hpp $(SDIR)/opencl.hpp

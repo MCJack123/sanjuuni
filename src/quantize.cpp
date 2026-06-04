@@ -25,7 +25,7 @@
 
 #define ALLOWB (2+4+8)
 
-extern void toLab(const uchar * image, uchar * output, ulong size);
+extern void toLab(uchar * image, uchar * output, ulong size);
 
 #define PARALLEL_BITONIC_B2_KERNEL "ParallelBitonic_B2"
 #define PARALLEL_BITONIC_B4_KERNEL "ParallelBitonic_B4"
